@@ -159,6 +159,7 @@ rounded away.
 
 - `POST /api/transfers` — create a transfer.
   Body: `{ senderName, recipientName, amount, from, to }`
+  Requires an `Idempotency-Key` header (see below).
 - `GET /api/transfers` — list transfers. Supports `?status=`, `?q=` (name
   search), `?archived=` (true/false/all), and `?limit=`/`?offset=` pagination.
   Archived transfers are excluded from results by default.
@@ -168,6 +169,34 @@ rounded away.
 - `POST /api/transfers/:id/cancel` — sender cancels a pending transfer.
 - `POST /api/transfers/:id/archive` — archive a transfer, hiding it from default list results.
 - `POST /api/transfers/:id/unarchive` — unarchive a transfer, restoring it to default list results.
+
+#### Idempotency
+
+`POST /api/transfers` requires an `Idempotency-Key` header. The endpoint moves
+money, so a client that omits the header is not opting out of protection, it is
+unaware it needs it; the request is rejected with 400 rather than risking a
+duplicate.
+
+For a given (API token, key) pair the operation runs at most once:
+
+- **Retry with the same payload** replays the stored transfer, answering 201
+  with the original body. The quote is not recomputed, so a moved rate cannot
+  change the answer, and no second payment is submitted.
+- **Reuse with a different payload** answers 409. The fingerprint covers the
+  fields that determine the transfer, so property order, an amount sent as a
+  string, and unrelated extra fields all still count as the same request.
+- **A retry arriving while the first is still in flight** answers 409 rather
+  than starting a second settlement.
+- **A provider failure releases the key**, so retrying with the same key can
+  succeed once the provider recovers.
+
+Keys are scoped to the API token: two callers using the same key get two
+independent transfers, and neither can reach the other's.
+
+Records live in the same store as the transfers, so with the in-memory store
+that backs this demo a restart clears both together. That keeps them
+consistent: a surviving reservation would replay a transfer that no longer
+exists.
 
 ### Users
 

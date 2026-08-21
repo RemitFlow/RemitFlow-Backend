@@ -10,12 +10,17 @@ const auditService = require('../services/auditService');
 const store = {
   users: new Map(),
   transfers: new Map(),
+  // Keyed by "<actor> <idempotency-key>". Lives here rather than in a module
+  // local so it shares the transfers' lifetime: a replay can never outlive the
+  // transfer it would replay.
+  idempotency: new Map(),
 };
 
 /** Remove all records from the store. Primarily used in tests/seeding. */
 function reset() {
   store.users.clear();
   store.transfers.clear();
+  store.idempotency.clear();
   auditService.reset();
 }
 

@@ -116,7 +116,7 @@ test('GET /api/users returns 401 when token is unknown', async () => {
 test('POST /api/transfers returns 401 when token is unknown', async () => {
   const { status, body } = await fetchJson('/api/transfers', {
     method: 'POST',
-    headers: { ...authHeader('bad-token'), 'Content-Type': 'application/json' },
+    headers: { ...authHeader('bad-token'), 'Content-Type': 'application/json', 'Idempotency-Key': 'idem-requireScope-118' },
     body: JSON.stringify({ senderName: 'Alice', recipientName: 'Bob', amount: 100, from: 'USD', to: 'EUR' }),
   });
   assert.equal(status, 401);
@@ -129,7 +129,7 @@ test('POST /api/transfers returns 403 when token only has transfers:read scope',
   // test-token-readonly has: transfers:read, users:read, audit:read — no :write scopes
   const { status, body } = await fetchJson('/api/transfers', {
     method: 'POST',
-    headers: { ...authHeader('test-token-readonly'), 'Content-Type': 'application/json' },
+    headers: { ...authHeader('test-token-readonly'), 'Content-Type': 'application/json', 'Idempotency-Key': 'idem-requireScope-131' },
     body: JSON.stringify({ senderName: 'Alice', recipientName: 'Bob', amount: 100, from: 'USD', to: 'EUR' }),
   });
   assert.equal(status, 403);
@@ -153,7 +153,7 @@ test('POST /api/transfers/:id/claim returns 403 when token only has transfers:re
   // Create a transfer first using the admin token, then try to claim with read-only
   const createRes = await fetchJson('/api/transfers', {
     method: 'POST',
-    headers: { ...authHeader('test-token-admin'), 'Content-Type': 'application/json' },
+    headers: { ...authHeader('test-token-admin'), 'Content-Type': 'application/json', 'Idempotency-Key': 'idem-requireScope-155' },
     body: JSON.stringify({ senderName: 'Alice', recipientName: 'Bob', amount: 100, from: 'USD', to: 'EUR' }),
   });
   assert.equal(createRes.status, 201);
@@ -226,7 +226,7 @@ test('GET /api/transfers returns 200 with readonly token', async () => {
 test('POST /api/transfers returns 201 with admin token', async () => {
   const { status, body } = await fetchJson('/api/transfers', {
     method: 'POST',
-    headers: { ...authHeader('test-token-admin'), 'Content-Type': 'application/json' },
+    headers: { ...authHeader('test-token-admin'), 'Content-Type': 'application/json', 'Idempotency-Key': 'idem-requireScope-228' },
     body: JSON.stringify({ senderName: 'Alice', recipientName: 'Bob', amount: 100, from: 'USD', to: 'EUR' }),
   });
   assert.equal(status, 201);
@@ -236,7 +236,7 @@ test('POST /api/transfers returns 201 with admin token', async () => {
 test('POST /api/transfers returns 201 with transfers-scoped token', async () => {
   const { status, body } = await fetchJson('/api/transfers', {
     method: 'POST',
-    headers: { ...authHeader('test-token-transfers'), 'Content-Type': 'application/json' },
+    headers: { ...authHeader('test-token-transfers'), 'Content-Type': 'application/json', 'Idempotency-Key': 'idem-requireScope-238' },
     body: JSON.stringify({ senderName: 'Alice', recipientName: 'Bob', amount: 100, from: 'USD', to: 'EUR' }),
   });
   assert.equal(status, 201);
@@ -291,7 +291,7 @@ test('full transfer lifecycle: create → claim with correct scopes', async () =
   // Create
   const createRes = await fetchJson('/api/transfers', {
     method: 'POST',
-    headers: { ...authHeader('test-token-admin'), 'Content-Type': 'application/json' },
+    headers: { ...authHeader('test-token-admin'), 'Content-Type': 'application/json', 'Idempotency-Key': 'idem-requireScope-293' },
     body: JSON.stringify({ senderName: 'Alice', recipientName: 'Bob', amount: 200, from: 'USD', to: 'INR' }),
   });
   assert.equal(createRes.status, 201);
@@ -317,7 +317,7 @@ test('full transfer lifecycle: create → claim with correct scopes', async () =
 test('full transfer lifecycle: create → cancel with correct scopes', async () => {
   const createRes = await fetchJson('/api/transfers', {
     method: 'POST',
-    headers: { ...authHeader('test-token-transfers'), 'Content-Type': 'application/json' },
+    headers: { ...authHeader('test-token-transfers'), 'Content-Type': 'application/json', 'Idempotency-Key': 'idem-requireScope-319' },
     body: JSON.stringify({ senderName: 'Carlos', recipientName: 'Diaz', amount: 500, from: 'EUR', to: 'MXN' }),
   });
   assert.equal(createRes.status, 201);

@@ -1,7 +1,40 @@
 'use strict';
 
 const transferService = require('../services/transferService');
+const idempotencyService = require('../services/idempotencyService');
+const ApiError = require('../utils/ApiError');
 const { parsePagination } = require('../utils/pagination');
+
+/** Upper bound on a client-supplied key, so the map cannot be grown without limit. */
+const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+
+/**
+ * Read and validate the Idempotency-Key header.
+ *
+ * Required rather than optional: this endpoint moves money, and a client that
+ * omits the header is not opting out of protection, it is unaware it needs it.
+ * Failing the request is the only outcome that cannot silently duplicate a
+ * transfer.
+ *
+ * @param {import('express').Request} req
+ * @returns {string}
+ * @throws {ApiError} 400 when the header is missing or unusable.
+ */
+function requireIdempotencyKey(req) {
+  const raw = req.get('Idempotency-Key');
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw ApiError.badRequest(
+      'Idempotency-Key header is required to create a transfer'
+    );
+  }
+  const key = raw.trim();
+  if (key.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    throw ApiError.badRequest(
+      `Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`
+    );
+  }
+  return key;
+}
 
 /**
  * Transfer controllers.
@@ -12,7 +45,31 @@ const { parsePagination } = require('../utils/pagination');
  * Create a new transfer.
  */
 function createTransfer(req, res) {
-  const transfer = transferService.createTransfer(req.body, req.id);
+  const key = requireIdempotencyKey(req);
+
+  // The fingerprint covers the fields that determine the operation, not the raw
+  // body: an unrelated extra property must not read as a conflicting retry.
+  // `amount` is normalized because "100" and 100 both validate and produce the
+  // same transfer, so treating them as different requests would reject a
+  // legitimate retry from a client that re-serialized its payload.
+  const fingerprint = idempotencyService.fingerprint({
+    senderName: req.body.senderName,
+    recipientName: req.body.recipientName,
+    amount: Number(req.body.amount),
+    from: req.body.from,
+    to: req.body.to,
+  });
+
+  const transfer = transferService.createTransfer(req.body, req.id, {
+    actor: req.token,
+    key,
+    fingerprint,
+  });
+
+  // A replay answers 201 with the original transfer, exactly as the first call
+  // did. Replaying the stored result means replaying all of it; downgrading the
+  // status would make a successful retry look different from the response it is
+  // standing in for.
   res.status(201).json(transfer);
 }
 

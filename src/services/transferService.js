@@ -6,6 +6,7 @@ const ApiError = require('../utils/ApiError');
 const { TRANSFER_STATUS, TRANSFER_TRANSITIONS } = require('../config/constants');
 const quoteService = require('./quoteService');
 const stellarService = require('./stellarService');
+const idempotencyService = require('./idempotencyService');
 const auditService = require('./auditService');
 
 // Keep lifecycle timestamps strictly increasing even when multiple operations
@@ -106,11 +107,58 @@ function getTransferOrThrow(id) {
 
 /**
  * Create a new transfer using a freshly computed quote.
+ *
+ * When `idempotency` is supplied the whole operation is exactly-once for that
+ * (actor, key) pair: the key is reserved before the provider is called, so a
+ * retry arriving mid-flight cannot start a second settlement, and once the
+ * transfer exists the stored result is replayed instead of re-running.
+ *
+ * The context is optional because idempotency is actor-scoped and an actor only
+ * exists at the HTTP boundary; internal callers have no token to scope to. The
+ * route requires the header, so every request-driven creation is covered.
+ *
  * @param {object} data
  * @param {string} [requestId] - optional correlation id for audit logging
+ * @param {{ actor: string, key: string, fingerprint: string }} [idempotency]
  * @returns {object}
  */
-function createTransfer(data, requestId) {
+function createTransfer(data, requestId, idempotency) {
+  if (idempotency) {
+    const outcome = idempotencyService.begin(
+      store.idempotency,
+      idempotency.actor,
+      idempotency.key,
+      idempotency.fingerprint
+    );
+    // A completed record short-circuits before the quote is recomputed. Rates
+    // move, so recomputing would hand the client a different transfer under the
+    // same key, which is the duplicate this is meant to prevent.
+    if (outcome.status === 'replay') {
+      return outcome.result;
+    }
+  }
+
+  try {
+    return createTransferUnchecked(data, requestId, idempotency);
+  } catch (err) {
+    // The operation never reached a terminal state, so the key must not stay
+    // burned: the client's correct response to a provider failure is to retry
+    // with the same key, and that has to be able to succeed.
+    if (idempotency) {
+      idempotencyService.release(store.idempotency, idempotency.actor, idempotency.key);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Perform the creation itself, with the reservation already held.
+ * @param {object} data
+ * @param {string} [requestId]
+ * @param {{ actor: string, key: string }} [idempotency]
+ * @returns {object}
+ */
+function createTransferUnchecked(data, requestId, idempotency) {
   const quote = quoteService.getQuote(data.amount, data.from, data.to);
   const settlement = stellarService.submitPayment({
     amount: quote.sendAmount,
@@ -149,6 +197,15 @@ function createTransfer(data, requestId) {
     },
     requestId,
   });
+
+  if (idempotency) {
+    idempotencyService.complete(
+      store.idempotency,
+      idempotency.actor,
+      idempotency.key,
+      transfer
+    );
+  }
 
   return transfer;
 }

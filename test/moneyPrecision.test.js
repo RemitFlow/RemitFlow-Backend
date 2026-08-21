@@ -67,6 +67,7 @@ test('POST /api/transfers rejects an amount with sub-cent precision', async () =
     headers: {
       Authorization: 'Bearer test-token-admin',
       'Content-Type': 'application/json',
+      'Idempotency-Key': 'idem-precision-1',
     },
     body: JSON.stringify({
       senderName: 'Alice',
@@ -88,6 +89,7 @@ test('POST /api/transfers accepts a well-formed two-decimal amount', async () =>
     headers: {
       Authorization: 'Bearer test-token-admin',
       'Content-Type': 'application/json',
+      'Idempotency-Key': 'idem-precision-2',
     },
     body: JSON.stringify({
       senderName: 'Alice',
