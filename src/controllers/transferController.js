@@ -1,9 +1,9 @@
 'use strict';
 
 const transferService = require('../services/transferService');
+const { buildHistoryPage } = require('../utils/historyPage');
 const idempotencyService = require('../services/idempotencyService');
 const ApiError = require('../utils/ApiError');
-const { parsePagination } = require('../utils/pagination');
 
 /** Upper bound on a client-supplied key, so the map cannot be grown without limit. */
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
@@ -78,6 +78,10 @@ function createTransfer(req, res) {
  * List transfers, optionally filtered by ?status= and/or ?q= (name search).
  * Archived transfers are excluded by default; pass ?archived=true to see only archived,
  * or ?archived=all to include both archived and non-archived.
+ *
+ * Pagination: pass ?cursor= to page by the creation-order index (stable while
+ * transfers are being created), or the legacy ?offset=. ?order= selects asc
+ * (oldest first, the default) or desc. ?limit= is capped by config.pagination.maxLimit.
  */
 function listTransfers(req, res) {
   const archivedParam = req.query.archived;
@@ -90,14 +94,23 @@ function listTransfers(req, res) {
     archived = false;
   }
 
-  const all = transferService.listTransfers({
+  const filters = transferService.normaliseTransferFilters({
     status: req.query.status,
     search: req.query.q,
     archived,
   });
-  const { limit, offset } = parsePagination(req.query);
-  const transfers = all.slice(offset, offset + limit);
-  res.json({ total: all.length, count: transfers.length, limit, offset, transfers });
+
+  const { items, envelope } = buildHistoryPage({
+    req,
+    collection: 'transfers',
+    filters,
+    defaultOrder: 'asc',
+    query: (args) => transferService.queryTransfers({ ...filters, ...args }),
+    countTotal: () => transferService.listTransfers(filters).length,
+    resolvePosition: (seq) => transferService.positionKeyAt(seq),
+  });
+
+  res.json({ ...envelope, transfers: items });
 }
 
 /**

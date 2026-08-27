@@ -8,6 +8,7 @@ const quoteService = require('./quoteService');
 const stellarService = require('./stellarService');
 const idempotencyService = require('./idempotencyService');
 const auditService = require('./auditService');
+const config = require('../config');
 
 // Keep lifecycle timestamps strictly increasing even when multiple operations
 // happen within the same millisecond (common in tests and API batches).
@@ -34,17 +35,23 @@ function nextTimestamp(previous) {
  * @returns {Array<object>}
  */
 function listTransfers(filters = {}) {
-  const { status, search, archived } = filters;
-  let transfers = Array.from(store.transfers.values());
+  const match = buildTransferFilter(filters);
+  return Array.from(store.transfers.values()).filter(match);
+}
 
-  // Filter by archived state: default excludes archived transfers
-  if (archived === true) {
-    transfers = transfers.filter((t) => t.archivedAt != null);
-  } else if (archived !== 'all') {
-    // archived === false or undefined: exclude archived
-    transfers = transfers.filter((t) => !t.archivedAt);
-  }
-  // archived === 'all' includes both archived and non-archived
+/**
+ * Normalise a transfer filter set into a canonical description.
+ *
+ * The canonical form is what a cursor is fingerprinted against, so two requests
+ * that mean the same thing (`?status=pending` and `?status=pending&archived=false`)
+ * produce interchangeable cursors, while two that mean different things never do.
+ *
+ * @param {object} [filters]
+ * @returns {{ status: string|null, search: string|null, archived: boolean|'all' }}
+ * @throws {ApiError} 400 when the status filter is not a known status.
+ */
+function normaliseTransferFilters(filters = {}) {
+  const { status, search, archived } = filters;
 
   if (status) {
     const validStatuses = Object.values(TRANSFER_STATUS);
@@ -54,19 +61,96 @@ function listTransfers(filters = {}) {
         { allowed: validStatuses }
       );
     }
-    transfers = transfers.filter((t) => t.status === status);
   }
 
-  if (search) {
-    const needle = String(search).trim().toLowerCase();
-    transfers = transfers.filter(
-      (t) =>
-        t.senderName.toLowerCase().includes(needle) ||
-        t.recipientName.toLowerCase().includes(needle)
-    );
-  }
+  const needle = search == null ? '' : String(search).trim().toLowerCase();
 
-  return transfers;
+  return {
+    status: status || null,
+    search: needle === '' ? null : needle,
+    archived: archived === true ? true : (archived === 'all' ? 'all' : false),
+  };
+}
+
+/**
+ * Build the predicate for a transfer filter set.
+ * @param {object} [filters]
+ * @returns {(transfer: object) => boolean}
+ */
+function buildTransferFilter(filters = {}) {
+  const { status, search, archived } = normaliseTransferFilters(filters);
+
+  return function matches(transfer) {
+    // Archived state: `true` returns only archived, `'all'` returns both,
+    // anything else (the default) excludes archived transfers.
+    if (archived === true) {
+      if (transfer.archivedAt == null) return false;
+    } else if (archived !== 'all') {
+      if (transfer.archivedAt) return false;
+    }
+
+    if (status && transfer.status !== status) return false;
+
+    if (search) {
+      const inSender = transfer.senderName.toLowerCase().includes(search);
+      const inRecipient = transfer.recipientName.toLowerCase().includes(search);
+      if (!inSender && !inRecipient) return false;
+    }
+
+    return true;
+  };
+}
+
+/**
+ * Page through transfer history using the creation-order index.
+ *
+ * Ordering is by creation position, which is immutable: claiming, cancelling
+ * or archiving a transfer never moves it. A cursor therefore stays valid across
+ * arbitrary concurrent writes - new transfers only ever appear at the newest
+ * edge of the ordering, never in the middle of a page the client already read.
+ *
+ * @param {object} [options]
+ * @param {string} [options.status]
+ * @param {string} [options.search]
+ * @param {boolean|'all'} [options.archived]
+ * @param {'asc'|'desc'} [options.order] - defaults to oldest first.
+ * @param {number} [options.limit]
+ * @param {number|null} [options.afterSeq] - exclusive start position from a cursor.
+ * @param {number} [options.skip] - legacy offset support.
+ * @param {number} [options.maxScan] - per-request work budget.
+ * @returns {{ items: object[], last: object|null, hasMore: boolean, scanned: number,
+ *   scanTruncated: boolean, skipped: number }}
+ */
+function queryTransfers({
+  status,
+  search,
+  archived,
+  order = 'asc',
+  limit = config.pagination.defaultLimit,
+  afterSeq = null,
+  skip = 0,
+  maxScan = config.pagination.maxScan,
+} = {}) {
+  return store.transferIndex.scan({
+    match: buildTransferFilter({ status, search, archived }),
+    order,
+    limit,
+    afterSeq,
+    skip,
+    maxScan,
+  });
+}
+
+/**
+ * Timestamp of the transfer occupying a given index position, or null when no
+ * such position exists. Used to detect cursors that survived a store reset and
+ * now point at an unrelated record.
+ * @param {number} seq
+ * @returns {string|null}
+ */
+function positionKeyAt(seq) {
+  const record = store.transferIndex.recordAt(seq);
+  return record ? record.key : null;
 }
 
 /**
@@ -184,6 +268,7 @@ function createTransferUnchecked(data, requestId, idempotency) {
   transfer.updatedAt = nextTimestamp(transfer.createdAt);
 
   store.transfers.set(transfer.id, transfer);
+  store.transferIndex.append(transfer);
 
   auditService.addEntry({
     action: 'transfer.created',
@@ -303,6 +388,9 @@ function unarchiveTransfer(id) {
 
 module.exports = {
   listTransfers,
+  normaliseTransferFilters,
+  positionKeyAt,
+  queryTransfers,
   getStats,
   getTransferOrThrow,
   createTransfer,

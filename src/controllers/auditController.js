@@ -1,7 +1,7 @@
 'use strict';
 
 const auditService = require('../services/auditService');
-const { parsePagination } = require('../utils/pagination');
+const { buildHistoryPage } = require('../utils/historyPage');
 
 /**
  * Audit log controllers.
@@ -9,26 +9,29 @@ const { parsePagination } = require('../utils/pagination');
 
 /**
  * GET /api/audit
- * Return all audit log entries, newest first, with limit/offset pagination.
- * Supports optional ?resourceId= query param to filter by resource.
+ * Return audit log entries, newest first by default.
+ *
+ * Supports ?resourceId= to filter by resource, ?order=asc|desc, ?limit=, and
+ * either ?cursor= (stable under concurrent writes) or the legacy ?offset=.
  */
 function listAuditEntries(req, res) {
-  const { resourceId } = req.query;
+  const resourceId = req.query.resourceId == null || req.query.resourceId === ''
+    ? null
+    : String(req.query.resourceId);
 
-  const all = resourceId
-    ? auditService.getEntriesForResource(resourceId)
-    : auditService.getEntries();
+  const filters = { resourceId };
 
-  const { limit, offset } = parsePagination(req.query);
-  const entries = all.slice(offset, offset + limit);
-
-  res.json({
-    total: all.length,
-    count: entries.length,
-    limit,
-    offset,
-    entries,
+  const { items, envelope } = buildHistoryPage({
+    req,
+    collection: 'audit',
+    filters,
+    defaultOrder: 'desc',
+    query: (args) => auditService.queryEntries({ resourceId, ...args }),
+    countTotal: () => auditService.countEntries(resourceId),
+    resolvePosition: (seq) => auditService.positionKeyAt(seq, resourceId),
   });
+
+  res.json({ ...envelope, entries: items });
 }
 
 module.exports = {

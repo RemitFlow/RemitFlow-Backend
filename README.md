@@ -45,6 +45,10 @@ The application is configured using environment variables (typically defined in 
 | `DB_POOL_CONNECTION_TIMEOUT_MS` | Time to wait for a connection before timing out (ms) | `2000` |
 | `CACHE_DEFAULT_POLICY` | Default cache policy for endpoints (`no-store`, `public`, `private`) | `no-store` |
 | `CACHE_RATES_MAX_AGE_SECONDS` | Cache duration for rates endpoints (seconds) | `10` |
+| `PAGINATION_DEFAULT_LIMIT` | Page size used when a request omits `limit` | `50` |
+| `PAGINATION_MAX_LIMIT` | Largest accepted `limit`; bigger requests are rejected | `200` |
+| `PAGINATION_MAX_SCAN` | Max records a single history query may examine | `10000` |
+| `PAGINATION_CURSOR_SECRET` | HMAC key used to sign pagination cursors | *(random per process)* |
 | `API_TOKENS` | JSON object mapping API tokens to their allowed scopes (see [Authentication](#authentication)) | *(demo tokens)* |
 
 
@@ -109,7 +113,7 @@ src/
   routes/       Express routers
   services/     business logic (rates, quotes, transfers, users, error tracking)
   store/        in-memory store and seed data
-  utils/        logger, ids, money, ApiError, asyncHandler
+  utils/        logger, ids, money, ApiError, asyncHandler, pagination/cursors
   validators/   request validators
   app.js        Express app assembly
   index.js      server bootstrap
@@ -126,6 +130,91 @@ consistent envelope:
 
 Every response carries an `X-Request-Id` header (echoed from the request when
 supplied) so logs and errors can be correlated.
+
+### Pagination
+
+`GET /api/transfers` and `GET /api/audit` page with **opaque cursors**. A cursor
+names a position in the collection rather than a row count, so pages stay
+correct while records are being written.
+
+| Parameter | Description |
+|-----------|-------------|
+| `limit` | Page size. Defaults to `PAGINATION_DEFAULT_LIMIT`; values above `PAGINATION_MAX_LIMIT` are **rejected with 400**, not clamped. |
+| `order` | `asc` or `desc`. Transfers default to `asc`, audit entries to `desc`. |
+| `cursor` | Opaque cursor from a previous response's `pageInfo`. |
+| `offset` | Legacy, deprecated. Cannot be combined with `cursor`. |
+
+Every response carries a `pageInfo` block:
+
+```json
+{
+  "count": 50,
+  "limit": 50,
+  "order": "asc",
+  "pageInfo": {
+    "hasMore": true,
+    "nextCursor": "eyJ2Ijox...",
+    "endCursor": "eyJ2Ijox...",
+    "scanned": 51,
+    "scanTruncated": false
+  },
+  "transfers": []
+}
+```
+
+- `nextCursor` — pass as `?cursor=` to fetch the next page; `null` on the last page.
+- `endCursor` — the position this page ended at, present even on the last page.
+  With `order=asc` a client can park here and poll for records appended later
+  without re-reading anything.
+- `scanned` / `scanTruncated` — how many records the query examined, and whether
+  it stopped at `PAGINATION_MAX_SCAN` rather than at the end of the collection.
+  A truncated page is still gap-free: follow `nextCursor` to continue.
+
+To page a collection, walk it:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:3000/api/transfers?limit=50"
+# then, with pageInfo.nextCursor from the previous response:
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:3000/api/transfers?limit=50&cursor=$CURSOR"
+```
+
+Cursors are signed and bound to the query that produced them. Reusing one
+against a different filter set, a different sort order, or a different API
+token is rejected rather than reinterpreted:
+
+| Condition | Status | `details.code` |
+|-----------|--------|----------------|
+| Cursor presented with a different API token | `403` | `CURSOR_ACTOR_MISMATCH` |
+| Filters changed mid-walk | `400` | `CURSOR_FILTER_MISMATCH` |
+| Sort order changed mid-walk | `400` | `CURSOR_ORDER_MISMATCH` |
+| Cursor edited, forged or truncated | `400` | `INVALID_CURSOR` |
+| Cursor predates a store restart | `400` | `STALE_CURSOR` |
+| `limit` above the maximum | `400` | `LIMIT_TOO_LARGE` |
+| `offset` beyond `PAGINATION_MAX_SCAN` | `400` | `OFFSET_TOO_DEEP` |
+| `cursor` and `offset` sent together | `400` | `CONFLICTING_PAGINATION` |
+
+Cursors are signed with `PAGINATION_CURSOR_SECRET`. Without it a random key is
+generated per process, which is fine for the in-memory store — cursors do not
+outlive a restart anyway — but **set it explicitly before running more than one
+instance behind a load balancer**, or cursors minted by one instance will be
+rejected by another.
+
+#### Deprecated: offset pagination
+
+`?offset=` still works and still returns the original `total`/`offset` fields,
+so existing clients keep working. It has two problems cursors fix:
+
+- **Instability.** The offset window is defined by a row count, so a record
+  inserted (or archived) while a client is paging shifts every later page: rows
+  get repeated or skipped entirely.
+- **Cost.** The server must walk every skipped record on each request, and
+  `total` costs a full pass over the filtered collection. Offsets beyond
+  `PAGINATION_MAX_SCAN` are refused for that reason.
+
+Offset responses include `pageInfo.nextCursor` as well, so a client can start on
+offsets and switch to cursors mid-walk.
 
 ### Caching and headers
 
@@ -161,8 +250,9 @@ rounded away.
   Body: `{ senderName, recipientName, amount, from, to }`
   Requires an `Idempotency-Key` header (see below).
 - `GET /api/transfers` — list transfers. Supports `?status=`, `?q=` (name
-  search), `?archived=` (true/false/all), and `?limit=`/`?offset=` pagination.
-  Archived transfers are excluded from results by default.
+  search), `?archived=` (true/false/all), and [cursor pagination](#pagination)
+  via `?cursor=`/`?limit=`/`?order=`. Archived transfers are excluded from
+  results by default; the default order is `asc` (oldest first).
 - `GET /api/transfers/stats` — aggregate counts and volume by currency.
 - `GET /api/transfers/:id` — fetch one transfer.
 - `POST /api/transfers/:id/claim` — recipient claims the transfer.
@@ -259,4 +349,8 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/users"
 
 # View audit log  (requires audit:read)
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/audit"
+
+# Page the audit log for one resource, newest first  (requires audit:read)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:3000/api/audit?resourceId=<id>&limit=20"
 ```

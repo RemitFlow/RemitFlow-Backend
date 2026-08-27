@@ -59,6 +59,16 @@ const config = {
     ratesMaxAge: parseInt(process.env.CACHE_RATES_MAX_AGE_SECONDS, 10) || 10,
   },
 
+  pagination: {
+    // Page size used when a request does not ask for one.
+    defaultLimit: parseInt(process.env.PAGINATION_DEFAULT_LIMIT, 10) || 50,
+    // Hard ceiling on a single page. Larger requests are rejected, not clamped.
+    maxLimit: parseInt(process.env.PAGINATION_MAX_LIMIT, 10) || 200,
+    // Ceiling on records a single history query may examine. Bounds the cost of
+    // a highly selective filter (or a deep offset) over a large history.
+    maxScan: parseInt(process.env.PAGINATION_MAX_SCAN, 10) || 10000,
+  },
+
   apiTokens: (() => {
     try {
       if (process.env.API_TOKENS) {
