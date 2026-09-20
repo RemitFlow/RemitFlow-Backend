@@ -23,6 +23,10 @@ const store = {
   // local so it shares the transfers' lifetime: a replay can never outlive the
   // transfer it would replay.
   idempotency: new Map(),
+  // Terminal lifecycle operation receipts are isolated from create idempotency.
+  // A claim/cancel retry replays the exact terminal result instead of running
+  // provider work twice.
+  lifecycleIdempotency: new Map(),
 };
 
 /** Remove all records from the store. Primarily used in tests/seeding. */
@@ -31,6 +35,7 @@ function reset() {
   store.transfers.clear();
   store.transferIndex.reset();
   store.idempotency.clear();
+  store.lifecycleIdempotency.clear();
   auditService.reset();
 }
 

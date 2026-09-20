@@ -247,6 +247,9 @@ function createTransferUnchecked(data, requestId, idempotency) {
   const settlement = stellarService.submitPayment({
     amount: quote.sendAmount,
     currency: quote.from,
+    idempotencyKey: idempotency
+      ? `create:${idempotency.actor}:${idempotency.key}`
+      : undefined,
   });
 
   const transfer = {
@@ -260,6 +263,7 @@ function createTransferUnchecked(data, requestId, idempotency) {
     rate: quote.rate,
     receiveAmount: quote.receiveAmount,
     status: TRANSFER_STATUS.PENDING,
+    version: 1,
     stellar: settlement,
     createdAt: new Date().toISOString(),
     updatedAt: null,
@@ -296,62 +300,215 @@ function createTransferUnchecked(data, requestId, idempotency) {
 }
 
 /**
- * Move a transfer to a new status if the transition is allowed.
+ * Snapshot a transfer before storing it as an idempotent replay result.
  * @param {object} transfer
- * @param {string} nextStatus
  * @returns {object}
  */
-function transition(transfer, nextStatus) {
+function snapshotTransfer(transfer) {
+  return JSON.parse(JSON.stringify(transfer));
+}
+
+/**
+ * Validate a status transition without mutating state.
+ * @param {object} transfer
+ * @param {string} nextStatus
+ */
+function assertTransitionAllowed(transfer, nextStatus) {
   const allowed = TRANSFER_TRANSITIONS[transfer.status] || [];
   if (!allowed.includes(nextStatus)) {
     throw ApiError.conflict(
-      `Cannot change transfer from ${transfer.status} to ${nextStatus}`
+      `Cannot change transfer from ${transfer.status} to ${nextStatus}`,
+      {
+        transferId: transfer.id,
+        currentStatus: transfer.status,
+        requestedStatus: nextStatus,
+        version: transfer.version,
+      }
     );
   }
-  transfer.status = nextStatus;
-  transfer.updatedAt = nextTimestamp(transfer.updatedAt);
-  return transfer;
+}
+
+/**
+ * Compare the caller's observed version with current state.
+ * @param {object} transfer
+ * @param {number} expectedVersion
+ */
+function assertExpectedVersion(transfer, expectedVersion) {
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    throw ApiError.badRequest('expectedVersion must be a positive integer');
+  }
+  if (transfer.version !== expectedVersion) {
+    throw ApiError.conflict('Transfer version conflict', {
+      transferId: transfer.id,
+      expectedVersion,
+      actualVersion: transfer.version,
+      currentStatus: transfer.status,
+    });
+  }
+}
+
+/**
+ * Execute one terminal lifecycle mutation with optimistic concurrency and an
+ * actor-scoped idempotency reservation.
+ *
+ * Provider preparation happens before the local terminal commit. Provider
+ * calls receive a stable operation id so retrying an ambiguous request reuses
+ * the first remote artifact. If preparation fails, status/version stay
+ * unchanged and the reservation is released for a safe retry.
+ *
+ * @param {string} id
+ * @param {object} spec
+ * @param {string} spec.action
+ * @param {string} spec.nextStatus
+ * @param {(operationId: string) => unknown} [spec.prepare]
+ * @param {(transfer: object, prepared: unknown) => void} [spec.applyPrepared]
+ * @param {string} spec.auditAction
+ * @param {(transfer: object) => object} spec.auditPayload
+ * @param {string} [requestId]
+ * @param {{actor: string, key: string, expectedVersion: number}} [lifecycle]
+ * @returns {object}
+ */
+function executeLifecycleMutation(id, spec, requestId, lifecycle) {
+  const initial = getTransferOrThrow(id);
+  const context = lifecycle || {
+    actor: 'internal',
+    key: `${spec.action}:${id}:${initial.version}`,
+    expectedVersion: initial.version,
+  };
+
+  if (!context.actor || !context.key) {
+    throw ApiError.badRequest(
+      'Lifecycle mutations require an actor and idempotency key'
+    );
+  }
+
+  const fingerprint = idempotencyService.fingerprint({
+    transferId: id,
+    action: spec.action,
+    expectedVersion: context.expectedVersion,
+  });
+  const scopedKey = `${id}:${spec.action}:${context.key}`;
+  const reservation = idempotencyService.begin(
+    store.lifecycleIdempotency,
+    context.actor,
+    scopedKey,
+    fingerprint
+  );
+
+  if (reservation.status === 'replay') {
+    return reservation.result;
+  }
+
+  let committed = false;
+  try {
+    const transfer = getTransferOrThrow(id);
+    assertExpectedVersion(transfer, context.expectedVersion);
+    assertTransitionAllowed(transfer, spec.nextStatus);
+
+    const beforeStatus = transfer.status;
+    const beforeVersion = transfer.version;
+    const operationId =
+      `${id}:${spec.action}:${context.actor}:${context.key}`;
+    const prepared = spec.prepare ? spec.prepare(operationId) : undefined;
+
+    // Provider adapters are synchronous today. Re-check immediately before
+    // commit so a future re-entrant adapter cannot commit over newer state.
+    if (transfer.status !== beforeStatus || transfer.version !== beforeVersion) {
+      throw ApiError.conflict(
+        'Transfer changed while lifecycle operation was in progress',
+        {
+          transferId: id,
+          expectedVersion: beforeVersion,
+          actualVersion: transfer.version,
+          currentStatus: transfer.status,
+        }
+      );
+    }
+
+    transfer.status = spec.nextStatus;
+    transfer.version = beforeVersion + 1;
+    transfer.updatedAt = nextTimestamp(transfer.updatedAt);
+    if (spec.applyPrepared) {
+      spec.applyPrepared(transfer, prepared);
+    }
+
+    const result = snapshotTransfer(transfer);
+    idempotencyService.complete(
+      store.lifecycleIdempotency,
+      context.actor,
+      scopedKey,
+      result
+    );
+    committed = true;
+
+    auditService.addEntry({
+      action: spec.auditAction,
+      resourceId: transfer.id,
+      payload: spec.auditPayload(transfer),
+      requestId,
+    });
+
+    return result;
+  } catch (err) {
+    if (!committed) {
+      idempotencyService.release(
+        store.lifecycleIdempotency,
+        context.actor,
+        scopedKey
+      );
+    }
+    throw err;
+  }
 }
 
 /**
  * Mark a transfer as claimed by the recipient.
  * @param {string} id
- * @param {string} [requestId] - optional correlation id for audit logging
+ * @param {string} [requestId]
+ * @param {{actor: string, key: string, expectedVersion: number}} [lifecycle]
  * @returns {object}
  */
-function claimTransfer(id, requestId) {
-  const transfer = getTransferOrThrow(id);
-  transition(transfer, TRANSFER_STATUS.CLAIMED);
-  transfer.claimableBalanceId = stellarService.createClaimableBalanceId();
-
-  auditService.addEntry({
-    action: 'transfer.claimed',
-    resourceId: transfer.id,
-    payload: { claimableBalanceId: transfer.claimableBalanceId },
+function claimTransfer(id, requestId, lifecycle) {
+  return executeLifecycleMutation(
+    id,
+    {
+      action: 'claim',
+      nextStatus: TRANSFER_STATUS.CLAIMED,
+      prepare: (operationId) =>
+        stellarService.createClaimableBalanceId(operationId),
+      applyPrepared: (transfer, claimableBalanceId) => {
+        transfer.claimableBalanceId = claimableBalanceId;
+      },
+      auditAction: 'transfer.claimed',
+      auditPayload: (transfer) => ({
+        claimableBalanceId: transfer.claimableBalanceId,
+        version: transfer.version,
+      }),
+    },
     requestId,
-  });
-
-  return transfer;
+    lifecycle
+  );
 }
 
 /**
  * Cancel a pending transfer.
  * @param {string} id
- * @param {string} [requestId] - optional correlation id for audit logging
+ * @param {string} [requestId]
+ * @param {{actor: string, key: string, expectedVersion: number}} [lifecycle]
  * @returns {object}
  */
-function cancelTransfer(id, requestId) {
-  const transfer = getTransferOrThrow(id);
-  transition(transfer, TRANSFER_STATUS.CANCELLED);
-
-  auditService.addEntry({
-    action: 'transfer.cancelled',
-    resourceId: transfer.id,
-    payload: {},
+function cancelTransfer(id, requestId, lifecycle) {
+  return executeLifecycleMutation(
+    id,
+    {
+      action: 'cancel',
+      nextStatus: TRANSFER_STATUS.CANCELLED,
+      auditAction: 'transfer.cancelled',
+      auditPayload: (transfer) => ({ version: transfer.version }),
+    },
     requestId,
-  });
-
-  return transfer;
+    lifecycle
+  );
 }
 
 /**
@@ -367,6 +524,7 @@ function archiveTransfer(id) {
     const timestamp = nextTimestamp(transfer.updatedAt);
     transfer.archivedAt = timestamp;
     transfer.updatedAt = timestamp;
+    transfer.version = (transfer.version || 1) + 1;
   }
   return transfer;
 }
@@ -383,6 +541,7 @@ function unarchiveTransfer(id) {
   }
   transfer.archivedAt = null;
   transfer.updatedAt = nextTimestamp(transfer.updatedAt);
+  transfer.version = (transfer.version || 1) + 1;
   return transfer;
 }
 

@@ -37,6 +37,41 @@ function requireIdempotencyKey(req) {
 }
 
 /**
+ * Parse the strong ETag version used as the optimistic precondition for
+ * terminal transfer mutations.
+ * @param {import('express').Request} req
+ * @returns {number}
+ */
+function requireTransferVersion(req) {
+  const raw = req.get('If-Match');
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new ApiError(
+      428,
+      'If-Match header is required for transfer lifecycle mutations'
+    );
+  }
+
+  const match = /^"([1-9][0-9]*)"$/.exec(raw.trim());
+  if (!match) {
+    throw ApiError.badRequest(
+      'If-Match must contain the quoted transfer version, for example "1"'
+    );
+  }
+  return Number(match[1]);
+}
+
+/**
+ * Return a transfer with its current version as a strong ETag.
+ * @param {import('express').Response} res
+ * @param {object} transfer
+ * @param {number} [status]
+ */
+function sendTransfer(res, transfer, status = 200) {
+  res.set('ETag', `"${transfer.version}"`);
+  res.status(status).json(transfer);
+}
+
+/**
  * Transfer controllers.
  */
 
@@ -70,7 +105,7 @@ function createTransfer(req, res) {
   // did. Replaying the stored result means replaying all of it; downgrading the
   // status would make a successful retry look different from the response it is
   // standing in for.
-  res.status(201).json(transfer);
+  sendTransfer(res, transfer, 201);
 }
 
 /**
@@ -127,7 +162,7 @@ function getStats(req, res) {
  */
 function getTransfer(req, res) {
   const transfer = transferService.getTransferOrThrow(req.params.id);
-  res.json(transfer);
+  sendTransfer(res, transfer);
 }
 
 /**
@@ -135,8 +170,14 @@ function getTransfer(req, res) {
  * Mark a transfer as claimed by the recipient.
  */
 function claimTransfer(req, res) {
-  const transfer = transferService.claimTransfer(req.params.id, req.id);
-  res.json(transfer);
+  const expectedVersion = requireTransferVersion(req);
+  const key = requireIdempotencyKey(req);
+  const transfer = transferService.claimTransfer(req.params.id, req.id, {
+    actor: req.token,
+    key,
+    expectedVersion,
+  });
+  sendTransfer(res, transfer);
 }
 
 /**
@@ -144,8 +185,14 @@ function claimTransfer(req, res) {
  * Cancel a pending transfer.
  */
 function cancelTransfer(req, res) {
-  const transfer = transferService.cancelTransfer(req.params.id, req.id);
-  res.json(transfer);
+  const expectedVersion = requireTransferVersion(req);
+  const key = requireIdempotencyKey(req);
+  const transfer = transferService.cancelTransfer(req.params.id, req.id, {
+    actor: req.token,
+    key,
+    expectedVersion,
+  });
+  sendTransfer(res, transfer);
 }
 
 /**
@@ -154,7 +201,7 @@ function cancelTransfer(req, res) {
  */
 function archiveTransfer(req, res) {
   const transfer = transferService.archiveTransfer(req.params.id);
-  res.json(transfer);
+  sendTransfer(res, transfer);
 }
 
 /**
@@ -163,7 +210,7 @@ function archiveTransfer(req, res) {
  */
 function unarchiveTransfer(req, res) {
   const transfer = transferService.unarchiveTransfer(req.params.id);
-  res.json(transfer);
+  sendTransfer(res, transfer);
 }
 
 module.exports = {
