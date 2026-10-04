@@ -18,6 +18,13 @@ When preparing a new release:
 
 ### Added
 
+- Monotonic, auditable archive/unarchive lifecycle for transfers: each
+  archive or unarchive appends an immutable `archiveHistory` event with
+  actor, reason, and a non-decreasing timestamp; `lastArchivedAt` retains
+  the prior archive instant after unarchive so reconciliation is not lost.
+  Optional `expectedUpdatedAt` (body or `If-Match`) rejects stale concurrent
+  commands with `409 STALE_ARCHIVE_COMMAND`. Audit log entries
+  `transfer.archived` / `transfer.unarchived` carry the same actor/reason.
 - Cursor pagination for `GET /api/transfers` and `GET /api/audit`. Pass
   `?cursor=` (with optional `?order=asc|desc`) to page by an indexed position
   instead of a row offset; responses carry a `pageInfo` block with
@@ -54,6 +61,21 @@ When preparing a new release:
   pagination exists to avoid.
 
 ### Fixed
+
+- Archive and unarchive HTTP requests preserve supplied non-string
+  `expectedUpdatedAt` values when there is no nonblank `If-Match` fallback.
+  The existing service check rejects those requests with
+  `409 STALE_ARCHIVE_COMMAND` instead of treating them as unversioned writes.
+  Body/header selection, omitted/null/blank optional values, actor attribution,
+  timestamp ordering, and no-token retries keep their existing behavior.
+
+- Archive and unarchive HTTP requests now store the existing keyed actor
+  fingerprint in lifecycle history and audit entries, keeping bearer credentials
+  out of transfer and audit responses while preserving attribution across cycles.
+  Fingerprints share the pagination signing secret and the process-local store's
+  lifetime; trusted service callers retain their explicit actor labels. Existing
+  event timestamps, reasons, request IDs, retries, and stale-command checks are
+  unchanged.
 
 - Offset pagination over transfer and audit history repeated or skipped rows
   when records were written while a client was paging, because the window was

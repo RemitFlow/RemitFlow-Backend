@@ -12,10 +12,12 @@ const config = require('../config');
 
 // Keep lifecycle timestamps strictly increasing even when multiple operations
 // happen within the same millisecond (common in tests and API batches).
-function nextTimestamp(previous) {
-  const now = Date.now();
-  const previousMs = previous ? Date.parse(previous) : NaN;
-  return new Date(Math.max(now, Number.isFinite(previousMs) ? previousMs + 1 : now)).toISOString();
+function nextTimestamp(...previous) {
+  const next = previous.reduce((latest, value) => {
+    const previousMs = value ? Date.parse(value) : NaN;
+    return Number.isFinite(previousMs) ? Math.max(latest, previousMs + 1) : latest;
+  }, Date.now());
+  return new Date(next).toISOString();
 }
 
 /**
@@ -264,6 +266,10 @@ function createTransferUnchecked(data, requestId, idempotency) {
     createdAt: new Date().toISOString(),
     updatedAt: null,
     archivedAt: null,
+    lastArchivedAt: null,
+    // Append-only archive/unarchive events. Timestamps here are immutable once
+    // written so repeated archive cycles never erase earlier lifecycle order.
+    archiveHistory: [],
   };
   transfer.updatedAt = nextTimestamp(transfer.createdAt);
 
@@ -355,34 +361,196 @@ function cancelTransfer(id, requestId) {
 }
 
 /**
- * Archive a transfer. An archived transfer is hidden from default list results
- * but remains queryable. Archiving is idempotent and orthogonal to the transfer
- * lifecycle status.
- * @param {string} id
+ * Normalise archive/unarchive options. Accepts either an options object or a
+ * legacy bare requestId string so existing call sites keep working.
+ * @param {string|object} [optionsOrRequestId]
+ * @returns {{ requestId: string|undefined, actor: string|null, reason: string|null, expectedUpdatedAt: string|undefined }}
+ */
+function normaliseArchiveOptions(optionsOrRequestId) {
+  if (optionsOrRequestId == null) {
+    return { requestId: undefined, actor: null, reason: null, expectedUpdatedAt: undefined };
+  }
+  if (typeof optionsOrRequestId === 'string') {
+    return {
+      requestId: optionsOrRequestId,
+      actor: null,
+      reason: null,
+      expectedUpdatedAt: undefined,
+    };
+  }
+  const reason = optionsOrRequestId.reason;
+  if (reason !== null && typeof reason === 'object') {
+    throw ApiError.badRequest('reason must not be an object or array');
+  }
+  return {
+    requestId: optionsOrRequestId.requestId,
+    actor: optionsOrRequestId.actor == null ? null : String(optionsOrRequestId.actor),
+    reason: reason == null || reason === '' ? null : String(reason),
+    expectedUpdatedAt: optionsOrRequestId.expectedUpdatedAt,
+  };
+}
+
+/**
+ * Reject a command whose caller observed a stale `updatedAt`.
+ * Omitting expectedUpdatedAt preserves the previous unversioned behaviour.
+ * @param {object} transfer
+ * @param {string|undefined} expectedUpdatedAt
+ */
+function assertFreshArchiveCommand(transfer, expectedUpdatedAt) {
+  if (expectedUpdatedAt == null) return;
+  if (transfer.updatedAt !== expectedUpdatedAt) {
+    throw ApiError.conflict(
+      `Stale archive command for transfer ${transfer.id}`,
+      {
+        code: 'STALE_ARCHIVE_COMMAND',
+        expectedUpdatedAt,
+        actualUpdatedAt: transfer.updatedAt,
+        archivedAt: transfer.archivedAt,
+      }
+    );
+  }
+}
+
+/**
+ * Latest immutable archive-history timestamp, used as a monotonic floor.
+ * @param {object} transfer
+ * @returns {string|null}
+ */
+function lastArchiveHistoryAt(transfer) {
+  const history = transfer.archiveHistory;
+  if (!Array.isArray(history) || history.length === 0) return null;
+  return history[history.length - 1].at;
+}
+
+/**
+ * Append an immutable archive lifecycle event and return it.
+ * @param {object} transfer
+ * @param {object} event
  * @returns {object}
  */
-function archiveTransfer(id) {
-  const transfer = getTransferOrThrow(id);
-  if (!transfer.archivedAt) {
-    const timestamp = nextTimestamp(transfer.updatedAt);
-    transfer.archivedAt = timestamp;
-    transfer.updatedAt = timestamp;
+function appendArchiveHistory(transfer, event) {
+  if (!Array.isArray(transfer.archiveHistory)) {
+    transfer.archiveHistory = [];
   }
+  const frozen = Object.freeze({
+    action: event.action,
+    at: event.at,
+    actor: event.actor,
+    reason: event.reason,
+    requestId: event.requestId,
+  });
+  transfer.archiveHistory.push(frozen);
+  return frozen;
+}
+
+/**
+ * Archive a transfer. An archived transfer is hidden from default list results
+ * but remains queryable. Archiving is idempotent for retries that observe the
+ * current archived state, orthogonal to the transfer lifecycle status, and
+ * records an immutable, auditable event with actor and reason.
+ *
+ * Pass `expectedUpdatedAt` to opt into optimistic concurrency: a mismatched
+ * value is rejected as a stale command so concurrent archive/unarchive cycles
+ * cannot silently overwrite each other.
+ *
+ * @param {string} id
+ * @param {string|object} [optionsOrRequestId]
+ * @returns {object}
+ */
+function archiveTransfer(id, optionsOrRequestId) {
+  const options = normaliseArchiveOptions(optionsOrRequestId);
+  const transfer = getTransferOrThrow(id);
+  assertFreshArchiveCommand(transfer, options.expectedUpdatedAt);
+
+  // Already archived: idempotent retry. Do not move archivedAt / updatedAt
+  // backwards or rewrite history — that was the original failure mode.
+  if (transfer.archivedAt) {
+    return transfer;
+  }
+
+  const timestamp = nextTimestamp(
+    transfer.updatedAt,
+    lastArchiveHistoryAt(transfer)
+  );
+  // Keep the current state and concurrency token intact if audit append fails.
+  auditService.addEntry({
+    action: 'transfer.archived',
+    resourceId: transfer.id,
+    payload: {
+      archivedAt: timestamp,
+      actor: options.actor,
+      reason: options.reason,
+    },
+    requestId: options.requestId,
+  });
+
+  transfer.archivedAt = timestamp;
+  transfer.lastArchivedAt = timestamp;
+  transfer.updatedAt = timestamp;
+
+  appendArchiveHistory(transfer, {
+    action: 'archive',
+    at: timestamp,
+    actor: options.actor,
+    reason: options.reason,
+    requestId: options.requestId || null,
+  });
+
   return transfer;
 }
 
 /**
  * Unarchive a previously archived transfer, restoring it to default list results.
+ * Clears the current-state `archivedAt` flag but retains `lastArchivedAt` and
+ * an immutable history entry so the lifecycle order stays reconcilable.
+ *
  * @param {string} id
+ * @param {string|object} [optionsOrRequestId]
  * @returns {object}
  */
-function unarchiveTransfer(id) {
+function unarchiveTransfer(id, optionsOrRequestId) {
+  const options = normaliseArchiveOptions(optionsOrRequestId);
   const transfer = getTransferOrThrow(id);
+  assertFreshArchiveCommand(transfer, options.expectedUpdatedAt);
+
   if (!transfer.archivedAt) {
-    throw ApiError.conflict(`Transfer is not archived: ${id}`);
+    throw ApiError.conflict(`Transfer is not archived: ${id}`, {
+      code: 'NOT_ARCHIVED',
+    });
   }
+
+  const previousArchivedAt = transfer.archivedAt;
+  const timestamp = nextTimestamp(
+    transfer.updatedAt,
+    lastArchiveHistoryAt(transfer),
+    previousArchivedAt
+  );
+
+  // Keep the current state and concurrency token intact if audit append fails.
+  auditService.addEntry({
+    action: 'transfer.unarchived',
+    resourceId: transfer.id,
+    payload: {
+      previousArchivedAt,
+      unarchivedAt: timestamp,
+      actor: options.actor,
+      reason: options.reason,
+    },
+    requestId: options.requestId,
+  });
+
   transfer.archivedAt = null;
-  transfer.updatedAt = nextTimestamp(transfer.updatedAt);
+  transfer.lastArchivedAt = previousArchivedAt;
+  transfer.updatedAt = timestamp;
+
+  appendArchiveHistory(transfer, {
+    action: 'unarchive',
+    at: timestamp,
+    actor: options.actor,
+    reason: options.reason,
+    requestId: options.requestId || null,
+  });
+
   return transfer;
 }
 
