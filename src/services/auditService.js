@@ -3,6 +3,7 @@
 const { newId } = require('../utils/ids');
 const { OrderedIndex } = require('../utils/orderedIndex');
 const config = require('../config');
+const { SCOPES, assertScopes } = require('../utils/authz');
 
 /**
  * Audit log service.
@@ -69,16 +70,19 @@ function addEntry({ action, resourceId, payload = {}, requestId } = {}) {
  * Return all audit entries, newest first.
  * @returns {Array<object>}
  */
-function getEntries() {
+function getEntries(auth) {
+  assertScopes(auth, SCOPES.AUDIT_READ);
   return auditIndex.records.map((record) => record.item).reverse();
 }
 
 /**
  * Return only the entries for a specific resource id.
  * @param {string} resourceId
+ * @param {{ scopes?: string[] }|null} [auth] - optional service authorization context
  * @returns {Array<object>}
  */
-function getEntriesForResource(resourceId) {
+function getEntriesForResource(resourceId, auth) {
+  assertScopes(auth, SCOPES.AUDIT_READ);
   // A nullish id matches no resource. Guarded explicitly because the index
   // treats a null group key as "the whole index".
   if (resourceId == null || resourceId === '') return [];
@@ -109,7 +113,9 @@ function queryEntries({
   afterSeq = null,
   skip = 0,
   maxScan = config.pagination.maxScan,
+  auth,
 } = {}) {
+  assertScopes(auth, SCOPES.AUDIT_READ);
   return auditIndex.scan({
     group: resourceId == null || resourceId === '' ? null : String(resourceId),
     order,
@@ -127,7 +133,8 @@ function queryEntries({
  * @param {string} [resourceId]
  * @returns {string|null}
  */
-function positionKeyAt(seq, resourceId) {
+function positionKeyAt(seq, resourceId, auth) {
+  assertScopes(auth, SCOPES.AUDIT_READ);
   const group = resourceId == null || resourceId === '' ? null : String(resourceId);
   const record = auditIndex.recordAt(seq, group);
   return record ? record.key : null;
@@ -138,7 +145,8 @@ function positionKeyAt(seq, resourceId) {
  * @param {string} [resourceId]
  * @returns {number}
  */
-function countEntries(resourceId) {
+function countEntries(resourceId, auth) {
+  assertScopes(auth, SCOPES.AUDIT_READ);
   if (resourceId == null || resourceId === '') return auditIndex.size;
   return auditIndex.recordsFor(String(resourceId)).length;
 }

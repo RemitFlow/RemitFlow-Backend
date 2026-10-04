@@ -2,6 +2,50 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+
+const invalidTokenMaps = [
+  ['malformed JSON', '{"confidential-fixture-token":'],
+  ['empty text', ''],
+  ['whitespace', ' \n\t '],
+  ['null', 'null'],
+  ['number', '1'],
+  ['string', '"token"'],
+  ['array with privileged scopes', '[["admin:read","users:write"]]'],
+  ['non-array scopes', '{"confidential-fixture-token":"admin:read"}'],
+  ['null scopes', '{"confidential-fixture-token":null}'],
+  ['non-string scope', '{"confidential-fixture-token":[null]}'],
+  ['unknown scope', '{"confidential-fixture-token":["confidential-fixture-scope"]}'],
+  ['empty token', '{"":["admin:read"]}'],
+  ['padded token', '{" confidential-fixture-token ":["admin:read"]}'],
+];
+
+for (const [label, value] of invalidTokenMaps) {
+  test(`config rejects supplied API_TOKENS ${label} before application startup`, () => {
+    const child = spawnSync(process.execPath, ['-e', "require('./src/app')()"], {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, NODE_ENV: 'production', API_TOKENS: value },
+      encoding: 'utf8',
+    });
+    assert.notEqual(child.status, 0, 'invalid explicit credentials must not start a demo-credential app');
+    assert.match(child.stderr, /API_TOKENS/);
+    assert.doesNotMatch(child.stderr, /confidential-fixture-token|confidential-fixture-scope/,
+      'configuration errors must not print token keys or supplied scope values');
+  });
+}
+
+test('config accepts known scopes and explicit empty maps without adding demo credentials', () => {
+  for (const value of ['{}', '{"fixture-token":["admin:read"],"read-token":["users:read"],"denied-token":[]}']) {
+    const child = spawnSync(process.execPath, ['-e', "console.log(JSON.stringify(require('./src/config').apiTokens))"], {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, API_TOKENS: value },
+      encoding: 'utf8',
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.deepEqual(JSON.parse(child.stdout), JSON.parse(value));
+  }
+});
 
 test('config loads default database connection pooling options', () => {
   // Clear require cache for the config module to load it fresh
@@ -85,4 +129,3 @@ test('config respects cache environment variables', () => {
     delete require.cache[require.resolve('../src/config')];
   }
 });
-

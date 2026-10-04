@@ -63,13 +63,23 @@ Authorization: Bearer <token>
 
 ### Scopes
 
+Canonical catalog: `src/config/scopes.js`. Full route matrix: [`docs/SCOPE_MATRIX.md`](docs/SCOPE_MATRIX.md).
+
 | Scope | Grants access to |
 |-------|-----------------|
 | `transfers:read` | `GET /api/transfers`, `GET /api/transfers/stats`, `GET /api/transfers/:id` |
-| `transfers:write` | `POST /api/transfers`, `POST /api/transfers/:id/claim`, `POST /api/transfers/:id/cancel`, `POST /api/transfers/:id/archive`, `POST /api/transfers/:id/unarchive` |
+| `transfers:write` | `POST /api/transfers`, `POST /api/transfers/bulk`, `POST /api/transfers/:id/claim`, `POST /api/transfers/:id/cancel`, `POST /api/transfers/:id/archive`, `POST /api/transfers/:id/unarchive` |
 | `users:read` | `GET /api/users`, `GET /api/users/:id` |
 | `users:write` | `POST /api/users` |
 | `audit:read` | `GET /api/audit` |
+| `admin:read` | `GET /api/admin/diagnostics` (also granted by the legacy `ADMIN_API_KEY` / `X-Admin-Token`) |
+
+HTTP controllers pass `authFromRequest(req)` so scopes are enforced at the route
+**and** again at the service boundary. Trusted internal callers can omit that
+context, so new request adapters must pass it explicitly; see the
+[service integration contract](docs/SCOPE_MATRIX.md#service-integration).
+Missing, malformed, and unknown transfer ids share one `404 Transfer not found`
+response so callers cannot enumerate identifiers by status or message shape.
 
 ### Public endpoints (no token required)
 
@@ -85,12 +95,21 @@ strings to their scope arrays:
 API_TOKENS='{"my-production-token":["transfers:read","transfers:write","users:read","users:write","audit:read"],"reporting-token":["transfers:read","audit:read"]}'
 ```
 
+An explicitly supplied value must be a JSON object with non-empty token keys,
+no leading or trailing key whitespace, and arrays of scopes from the catalog.
+Malformed JSON, blank values, invalid shapes, and unknown scopes stop startup
+with a configuration error that does not print credentials. They never enable
+the demo tokens. An empty object `{}` is valid and disables all API-token
+credentials; the separately configured legacy admin key retains its behavior.
+Only configured own entries are tokens, so inherited names such as `constructor`
+are unknown unless explicitly configured.
+
 If `API_TOKENS` is not set, the server starts with three **demo tokens** (safe
 for local development only — rotate before deploying):
 
 | Demo token | Scopes |
 |------------|--------|
-| `test-token-admin` | all scopes |
+| `test-token-admin` | all scopes (including `admin:read`) |
 | `test-token-readonly` | `transfers:read`, `users:read`, `audit:read` |
 | `test-token-transfers` | `transfers:read`, `transfers:write` |
 

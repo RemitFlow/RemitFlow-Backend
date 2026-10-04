@@ -4,6 +4,7 @@ const transferService = require('../services/transferService');
 const { buildHistoryPage } = require('../utils/historyPage');
 const idempotencyService = require('../services/idempotencyService');
 const ApiError = require('../utils/ApiError');
+const { authFromRequest } = require('../utils/authz');
 
 /** Upper bound on a client-supplied key, so the map cannot be grown without limit. */
 const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
@@ -64,7 +65,7 @@ function createTransfer(req, res) {
     actor: req.token,
     key,
     fingerprint,
-  });
+  }, authFromRequest(req));
 
   // A replay answers 201 with the original transfer, exactly as the first call
   // did. Replaying the stored result means replaying all of it; downgrading the
@@ -100,14 +101,15 @@ function listTransfers(req, res) {
     archived,
   });
 
+  const auth = authFromRequest(req);
   const { items, envelope } = buildHistoryPage({
     req,
     collection: 'transfers',
     filters,
     defaultOrder: 'asc',
-    query: (args) => transferService.queryTransfers({ ...filters, ...args }),
-    countTotal: () => transferService.listTransfers(filters).length,
-    resolvePosition: (seq) => transferService.positionKeyAt(seq),
+    query: (args) => transferService.queryTransfers({ ...filters, ...args, auth }),
+    countTotal: () => transferService.listTransfers(filters, auth).length,
+    resolvePosition: (seq) => transferService.positionKeyAt(seq, auth),
   });
 
   res.json({ ...envelope, transfers: items });
@@ -118,7 +120,7 @@ function listTransfers(req, res) {
  * Return aggregate transfer statistics.
  */
 function getStats(req, res) {
-  res.json(transferService.getStats());
+  res.json(transferService.getStats(authFromRequest(req)));
 }
 
 /**
@@ -126,7 +128,7 @@ function getStats(req, res) {
  * Fetch a single transfer by id.
  */
 function getTransfer(req, res) {
-  const transfer = transferService.getTransferOrThrow(req.params.id);
+  const transfer = transferService.getTransferOrThrow(req.params.id, authFromRequest(req));
   res.json(transfer);
 }
 
@@ -135,7 +137,7 @@ function getTransfer(req, res) {
  * Mark a transfer as claimed by the recipient.
  */
 function claimTransfer(req, res) {
-  const transfer = transferService.claimTransfer(req.params.id, req.id);
+  const transfer = transferService.claimTransfer(req.params.id, req.id, authFromRequest(req));
   res.json(transfer);
 }
 
@@ -144,7 +146,7 @@ function claimTransfer(req, res) {
  * Cancel a pending transfer.
  */
 function cancelTransfer(req, res) {
-  const transfer = transferService.cancelTransfer(req.params.id, req.id);
+  const transfer = transferService.cancelTransfer(req.params.id, req.id, authFromRequest(req));
   res.json(transfer);
 }
 
@@ -153,7 +155,7 @@ function cancelTransfer(req, res) {
  * Archive a transfer, hiding it from default list results.
  */
 function archiveTransfer(req, res) {
-  const transfer = transferService.archiveTransfer(req.params.id);
+  const transfer = transferService.archiveTransfer(req.params.id, authFromRequest(req));
   res.json(transfer);
 }
 
@@ -162,8 +164,19 @@ function archiveTransfer(req, res) {
  * Unarchive a transfer, restoring it to default list results.
  */
 function unarchiveTransfer(req, res) {
-  const transfer = transferService.unarchiveTransfer(req.params.id);
+  const transfer = transferService.unarchiveTransfer(req.params.id, authFromRequest(req));
   res.json(transfer);
+}
+
+/**
+ * POST /api/transfers/bulk
+ * Apply one write action to many transfer ids.
+ */
+function bulkMutate(req, res) {
+  const action = req.body && req.body.action;
+  const ids = req.body && req.body.ids;
+  const result = transferService.bulkMutate(action, ids, req.id, authFromRequest(req));
+  res.json(result);
 }
 
 module.exports = {
@@ -175,4 +188,5 @@ module.exports = {
   cancelTransfer,
   archiveTransfer,
   unarchiveTransfer,
+  bulkMutate,
 };

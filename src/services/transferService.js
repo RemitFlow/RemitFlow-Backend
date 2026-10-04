@@ -9,6 +9,13 @@ const stellarService = require('./stellarService');
 const idempotencyService = require('./idempotencyService');
 const auditService = require('./auditService');
 const config = require('../config');
+const {
+  SCOPES,
+  assertScopes,
+  transferNotFoundError,
+  isWellFormedTransferId,
+  normaliseBulkIds,
+} = require('../utils/authz');
 
 // Keep lifecycle timestamps strictly increasing even when multiple operations
 // happen within the same millisecond (common in tests and API batches).
@@ -34,7 +41,8 @@ function nextTimestamp(previous) {
  * @param {boolean} [filters.archived] - if true, return only archived; if false, exclude archived (default)
  * @returns {Array<object>}
  */
-function listTransfers(filters = {}) {
+function listTransfers(filters = {}, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_READ);
   const match = buildTransferFilter(filters);
   return Array.from(store.transfers.values()).filter(match);
 }
@@ -130,7 +138,9 @@ function queryTransfers({
   afterSeq = null,
   skip = 0,
   maxScan = config.pagination.maxScan,
+  auth,
 } = {}) {
+  assertScopes(auth, SCOPES.TRANSFERS_READ);
   return store.transferIndex.scan({
     match: buildTransferFilter({ status, search, archived }),
     order,
@@ -148,7 +158,8 @@ function queryTransfers({
  * @param {number} seq
  * @returns {string|null}
  */
-function positionKeyAt(seq) {
+function positionKeyAt(seq, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_READ);
   const record = store.transferIndex.recordAt(seq);
   return record ? record.key : null;
 }
@@ -158,7 +169,8 @@ function positionKeyAt(seq) {
  * Reports per-status counts and total send volume grouped by currency.
  * @returns {{ total: number, byStatus: object, volumeByCurrency: object }}
  */
-function getStats() {
+function getStats(auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_READ);
   const transfers = Array.from(store.transfers.values());
 
   const byStatus = {};
@@ -181,10 +193,15 @@ function getStats() {
  * @param {string} id
  * @returns {object}
  */
-function getTransferOrThrow(id) {
+function getTransferOrThrow(id, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_READ);
+  // Malformed and missing ids share one 404 so callers cannot enumerate.
+  if (!isWellFormedTransferId(id)) {
+    throw transferNotFoundError();
+  }
   const transfer = store.transfers.get(id);
   if (!transfer) {
-    throw ApiError.notFound(`Transfer not found: ${id}`);
+    throw transferNotFoundError();
   }
   return transfer;
 }
@@ -206,7 +223,8 @@ function getTransferOrThrow(id) {
  * @param {{ actor: string, key: string, fingerprint: string }} [idempotency]
  * @returns {object}
  */
-function createTransfer(data, requestId, idempotency) {
+function createTransfer(data, requestId, idempotency, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_WRITE);
   if (idempotency) {
     const outcome = idempotencyService.begin(
       store.idempotency,
@@ -296,18 +314,23 @@ function createTransferUnchecked(data, requestId, idempotency) {
 }
 
 /**
- * Move a transfer to a new status if the transition is allowed.
+ * Validate a transition without changing the stored transfer.
  * @param {object} transfer
  * @param {string} nextStatus
- * @returns {object}
+ * @returns {void}
  */
-function transition(transfer, nextStatus) {
+function assertTransition(transfer, nextStatus) {
   const allowed = TRANSFER_TRANSITIONS[transfer.status] || [];
   if (!allowed.includes(nextStatus)) {
     throw ApiError.conflict(
       `Cannot change transfer from ${transfer.status} to ${nextStatus}`
     );
   }
+}
+
+/** Move a transfer to an allowed status. */
+function transition(transfer, nextStatus) {
+  assertTransition(transfer, nextStatus);
   transfer.status = nextStatus;
   transfer.updatedAt = nextTimestamp(transfer.updatedAt);
   return transfer;
@@ -319,10 +342,15 @@ function transition(transfer, nextStatus) {
  * @param {string} [requestId] - optional correlation id for audit logging
  * @returns {object}
  */
-function claimTransfer(id, requestId) {
-  const transfer = getTransferOrThrow(id);
+function claimTransfer(id, requestId, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_WRITE);
+  // Pass null auth into getTransferOrThrow: write scope already asserted, and
+  // re-asserting transfers:read would reject write-only tokens if introduced.
+  const transfer = getTransferOrThrow(id, null);
+  assertTransition(transfer, TRANSFER_STATUS.CLAIMED);
+  const claimableBalanceId = stellarService.createClaimableBalanceId();
   transition(transfer, TRANSFER_STATUS.CLAIMED);
-  transfer.claimableBalanceId = stellarService.createClaimableBalanceId();
+  transfer.claimableBalanceId = claimableBalanceId;
 
   auditService.addEntry({
     action: 'transfer.claimed',
@@ -340,8 +368,9 @@ function claimTransfer(id, requestId) {
  * @param {string} [requestId] - optional correlation id for audit logging
  * @returns {object}
  */
-function cancelTransfer(id, requestId) {
-  const transfer = getTransferOrThrow(id);
+function cancelTransfer(id, requestId, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_WRITE);
+  const transfer = getTransferOrThrow(id, null);
   transition(transfer, TRANSFER_STATUS.CANCELLED);
 
   auditService.addEntry({
@@ -361,8 +390,9 @@ function cancelTransfer(id, requestId) {
  * @param {string} id
  * @returns {object}
  */
-function archiveTransfer(id) {
-  const transfer = getTransferOrThrow(id);
+function archiveTransfer(id, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_WRITE);
+  const transfer = getTransferOrThrow(id, null);
   if (!transfer.archivedAt) {
     const timestamp = nextTimestamp(transfer.updatedAt);
     transfer.archivedAt = timestamp;
@@ -376,14 +406,82 @@ function archiveTransfer(id) {
  * @param {string} id
  * @returns {object}
  */
-function unarchiveTransfer(id) {
-  const transfer = getTransferOrThrow(id);
+function unarchiveTransfer(id, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_WRITE);
+  const transfer = getTransferOrThrow(id, null);
   if (!transfer.archivedAt) {
     throw ApiError.conflict(`Transfer is not archived: ${id}`);
   }
   transfer.archivedAt = null;
   transfer.updatedAt = nextTimestamp(transfer.updatedAt);
   return transfer;
+}
+
+
+/**
+ * Supported bulk mutation actions. Kept as a closed set so the route cannot be
+ * turned into an arbitrary RPC surface.
+ */
+const BULK_ACTIONS = Object.freeze({
+  claim: claimTransfer,
+  cancel: cancelTransfer,
+  archive: (id, _requestId, auth) => archiveTransfer(id, auth),
+  unarchive: (id, _requestId, auth) => unarchiveTransfer(id, auth),
+});
+
+/**
+ * Apply one write action to many transfer ids.
+ *
+ * Per-id failures never leak whether the id was malformed, missing, or
+ * rejected by a lifecycle rule beyond a stable `code` string. A missing write
+ * scope fails the whole call before any mutation runs.
+ *
+ * @param {string} action
+ * @param {string[]} ids
+ * @param {string} [requestId]
+ * @param {{ actor?: string, scopes?: string[] }|null} [auth]
+ * @returns {{ results: Array<object> }}
+ */
+function bulkMutate(action, ids, requestId, auth) {
+  assertScopes(auth, SCOPES.TRANSFERS_WRITE);
+  if (typeof action !== 'string') {
+    throw ApiError.badRequest('action must be a string');
+  }
+  if (!Object.hasOwn(BULK_ACTIONS, action)) {
+    throw ApiError.badRequest(`Unsupported bulk action: ${action}`, {
+      allowed: Object.keys(BULK_ACTIONS),
+    });
+  }
+  const handler = BULK_ACTIONS[action];
+  const normalised = normaliseBulkIds(ids);
+  const results = normalised.map((id) => {
+    try {
+      const transfer = handler(id, requestId, auth);
+      return { id, ok: true, transfer };
+    } catch (err) {
+      const isApiError = err instanceof ApiError;
+      const status = isApiError ? err.statusCode : 500;
+      // Collapse not-found / malformed into one code. Lifecycle conflicts keep
+      // their own code so a client can retry sensibly without learning whether
+      // an unknown id existed.
+      let code = 'error';
+      if (status === 404) code = 'not_found';
+      else if (status === 409) code = 'conflict';
+      else if (status === 403) code = 'forbidden';
+      else if (status === 400) code = 'bad_request';
+      return {
+        id,
+        ok: false,
+        error: {
+          code,
+          status,
+          message: status === 404 ? transferNotFoundError().message
+            : (isApiError ? err.message : 'Internal server error'),
+        },
+      };
+    }
+  });
+  return { results };
 }
 
 module.exports = {
@@ -398,4 +496,6 @@ module.exports = {
   cancelTransfer,
   archiveTransfer,
   unarchiveTransfer,
+  bulkMutate,
+  BULK_ACTIONS: Object.keys(BULK_ACTIONS),
 };

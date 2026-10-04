@@ -93,6 +93,31 @@ test('getEntriesForResource returns an empty array for unknown resource', () => 
   assert.deepEqual(entries, []);
 });
 
+test('getEntriesForResource enforces explicit scopes and preserves trusted access', () => {
+  const ApiError = require('../src/utils/ApiError');
+  const first = auditService.addEntry({ action: 'transfer.created', resourceId: 'txn-A' });
+  auditService.addEntry({ action: 'user.created', resourceId: 'usr-B' });
+  const last = auditService.addEntry({ action: 'transfer.claimed', resourceId: 'txn-A' });
+
+  for (const auth of [{ scopes: ['transfers:read'] }, {}]) {
+    for (const resourceId of ['txn-A', 'missing', '', null]) {
+      assert.throws(
+        () => auditService.getEntriesForResource(resourceId, auth),
+        (err) => err instanceof ApiError && err.statusCode === 403 &&
+          err.message === 'Insufficient token scopes'
+      );
+    }
+  }
+
+  const allowed = { scopes: ['audit:read'] };
+  assert.deepEqual(auditService.getEntriesForResource('txn-A', allowed), [last, first]);
+  assert.deepEqual(auditService.getEntriesForResource('txn-A'), [last, first]);
+  assert.deepEqual(auditService.getEntriesForResource('txn-A', null), [last, first]);
+  assert.deepEqual(auditService.getEntriesForResource('missing', allowed), []);
+  assert.deepEqual(auditService.getEntriesForResource('', allowed), []);
+  assert.deepEqual(auditService.getEntriesForResource(null), []);
+});
+
 // ─── reset ────────────────────────────────────────────────────────────────────
 
 test('reset clears all entries', () => {

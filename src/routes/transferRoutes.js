@@ -23,6 +23,9 @@ router.get('/', requireScope(['transfers:read']), asyncHandler(transferControlle
 // GET /api/transfers/stats (declared before /:id so it is not captured)
 router.get('/stats', requireScope(['transfers:read']), asyncHandler(transferController.getStats));
 
+// POST /api/transfers/bulk (declared before /:id so "bulk" is not captured)
+router.post('/bulk', requireScope(['transfers:write']), asyncHandler(transferController.bulkMutate));
+
 // GET /api/transfers/:id
 router.get('/:id', requireScope(['transfers:read']), asyncHandler(transferController.getTransfer));
 

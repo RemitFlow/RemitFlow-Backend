@@ -113,6 +113,16 @@ test('GET /api/users returns 401 when token is unknown', async () => {
   assert.match(body.error.message, /Invalid API token/i);
 });
 
+for (const token of ['constructor', 'toString', '__proto__']) {
+  test(`unconfigured inherited token name ${token} stays unknown on user and admin routes`, async () => {
+    for (const route of ['/api/users', '/api/admin/diagnostics']) {
+      const { status, body } = await fetchJson(route, { headers: authHeader(token) });
+      assert.equal(status, 401, `${route} must not recognize an inherited object property as a token`);
+      assert.equal(body.error.status, 401);
+    }
+  });
+}
+
 test('POST /api/transfers returns 401 when token is unknown', async () => {
   const { status, body } = await fetchJson('/api/transfers', {
     method: 'POST',

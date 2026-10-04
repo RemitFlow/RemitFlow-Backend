@@ -2,6 +2,7 @@
 
 const userService = require('../services/userService');
 const { parsePagination } = require('../utils/pagination');
+const { authFromRequest } = require('../utils/authz');
 
 /**
  * User controllers.
@@ -12,7 +13,7 @@ const { parsePagination } = require('../utils/pagination');
  * List users with limit/offset pagination.
  */
 function listUsers(req, res) {
-  const all = userService.listUsers();
+  const all = userService.listUsers(authFromRequest(req));
   const { limit, offset } = parsePagination(req.query);
   const users = all.slice(offset, offset + limit);
   res.json({ total: all.length, count: users.length, limit, offset, users });
@@ -23,7 +24,7 @@ function listUsers(req, res) {
  * Fetch a single user by id.
  */
 function getUser(req, res) {
-  const user = userService.getUserOrThrow(req.params.id);
+  const user = userService.getUserOrThrow(req.params.id, authFromRequest(req));
   res.json(user);
 }
 
@@ -32,7 +33,7 @@ function getUser(req, res) {
  * Create a new user.
  */
 function createUser(req, res) {
-  const user = userService.createUser(req.body, req.id);
+  const user = userService.createUser(req.body, req.id, authFromRequest(req));
   res.status(201).json(user);
 }
 

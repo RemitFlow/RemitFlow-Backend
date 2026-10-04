@@ -10,6 +10,11 @@ When preparing a new release:
 1. Review the `[Unreleased]` section and ensure all notable changes are documented.
 2. Change the `[Unreleased]` heading to the new version number and current date (e.g., `## [1.0.0] - YYYY-MM-DD`).
 3. Create a new empty `## [Unreleased]` section at the top of the file, with `### Added`, `### Changed`, `### Fixed`, etc., as needed.
+
+- Consistent token-scope enforcement across transfer, user, audit, and admin
+  surfaces (`admin:read` scope, service-boundary checks, `POST /api/transfers/bulk`).
+  See `docs/SCOPE_MATRIX.md`. Malformed and missing transfer ids now share one
+  non-enumerating `404 Transfer not found` response.
 4. Update the `version` field in `package.json` to match the new version.
 5. Commit these changes with a conventional commit message (e.g., `chore: release v1.0.0`).
 6. Tag the commit with the new version (e.g., `git tag v1.0.0`) and push the changes and tags to the repository.

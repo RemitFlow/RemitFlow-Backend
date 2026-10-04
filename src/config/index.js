@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+const { assertKnownScopes } = require('./scopes');
 
 /**
  * Centralized application configuration.
@@ -71,18 +72,36 @@ const config = {
 
   apiTokens: (() => {
     try {
-      if (process.env.API_TOKENS) {
-        return JSON.parse(process.env.API_TOKENS);
+      // Demo credentials apply only when no token map was supplied. A broken
+      // deployment value must never silently enable the public demo tokens.
+      const configured = process.env.API_TOKENS === undefined ? {
+        'test-token-admin': [
+          'transfers:read',
+          'transfers:write',
+          'users:read',
+          'users:write',
+          'audit:read',
+          'admin:read',
+        ],
+        'test-token-readonly': ['transfers:read', 'users:read', 'audit:read'],
+        'test-token-transfers': ['transfers:read', 'transfers:write'],
+      } : JSON.parse(process.env.API_TOKENS);
+
+      if (configured === null || typeof configured !== 'object' || Array.isArray(configured)) {
+        throw new Error('Invalid token map');
       }
-    } catch (err) {
-      console.warn('Failed to parse API_TOKENS env var, falling back to defaults');
+
+      const tokens = Object.create(null);
+      for (const [token, scopes] of Object.entries(configured)) {
+        if (token === '' || token.trim() !== token) throw new Error('Invalid token key');
+        tokens[token] = assertKnownScopes(scopes, 'configured scope').slice();
+      }
+      return tokens;
+    } catch {
+      // Neither parser diagnostics nor scope-validation errors may expose
+      // configured token keys or values in startup logs.
+      throw new Error('API_TOKENS must be a JSON object mapping non-empty, unpadded token strings to arrays of known scopes');
     }
-    // Default tokens for demo purposes
-    return {
-      'test-token-admin': ['transfers:read', 'transfers:write', 'users:read', 'users:write', 'audit:read'],
-      'test-token-readonly': ['transfers:read', 'users:read', 'audit:read'],
-      'test-token-transfers': ['transfers:read', 'transfers:write']
-    };
   })(),
 };
 
