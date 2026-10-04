@@ -305,10 +305,14 @@ test('full transfer lifecycle: create → claim with correct scopes', async () =
   assert.equal(readRes.status, 200);
   assert.equal(readRes.body.id, id);
 
-  // Claim with write token
+  // Claim with write token (If-Match + Idempotency-Key required for lifecycle mutations)
   const claimRes = await fetchJson(`/api/transfers/${id}/claim`, {
     method: 'POST',
-    headers: authHeader('test-token-admin'),
+    headers: {
+      ...authHeader('test-token-admin'),
+      'If-Match': `"${createRes.body.version}"`,
+      'Idempotency-Key': 'idem-requireScope-claim',
+    },
   });
   assert.equal(claimRes.status, 200);
   assert.equal(claimRes.body.status, 'claimed');
@@ -325,7 +329,11 @@ test('full transfer lifecycle: create → cancel with correct scopes', async () 
 
   const cancelRes = await fetchJson(`/api/transfers/${id}/cancel`, {
     method: 'POST',
-    headers: authHeader('test-token-transfers'),
+    headers: {
+      ...authHeader('test-token-transfers'),
+      'If-Match': `"${createRes.body.version}"`,
+      'Idempotency-Key': 'idem-requireScope-cancel',
+    },
   });
   assert.equal(cancelRes.status, 200);
   assert.equal(cancelRes.body.status, 'cancelled');

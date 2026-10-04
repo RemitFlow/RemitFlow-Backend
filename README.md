@@ -260,6 +260,9 @@ rounded away.
 - `POST /api/transfers/:id/archive` — archive a transfer, hiding it from default list results.
 - `POST /api/transfers/:id/unarchive` — unarchive a transfer, restoring it to default list results.
 
+Claim and cancel require a quoted transfer version in `If-Match` and a stable
+`Idempotency-Key`; see [claim and cancel preconditions](#claim-and-cancel-preconditions).
+
 #### Idempotency
 
 `POST /api/transfers` requires an `Idempotency-Key` header. The endpoint moves
@@ -287,6 +290,26 @@ Records live in the same store as the transfers, so with the in-memory store
 that backs this demo a restart clears both together. That keeps them
 consistent: a surviving reservation would replay a transfer that no longer
 exists.
+
+#### Claim and cancel preconditions
+
+Read `GET /api/transfers/:id` and copy its `ETag` into `If-Match`, including
+the double quotes (for example, `"1"`). Choose a new `Idempotency-Key` for each
+new logical claim or cancel operation.
+
+Retry an uncertain operation with the **same key and original If-Match value**.
+A successful replay returns the first terminal result, even though the
+transfer's version has advanced. Do not turn a retry into a new operation by
+changing its key or version.
+
+| Status | Client action |
+|--------|---------------|
+| `400` | Supply a nonblank `Idempotency-Key` of at most 255 characters and a correctly quoted positive-integer `If-Match`. |
+| `428` | Supply the missing `If-Match` precondition. |
+| `409` for a stale version or invalid transition | Fetch the transfer again and inspect its current state before deciding on a new operation. |
+
+See [Transfer lifecycle concurrency](docs/TRANSFER_LIFECYCLE_CONCURRENCY.md)
+for version increments, replay behavior and the process-local storage boundary.
 
 ### Users
 
@@ -321,24 +344,40 @@ curl "http://localhost:3000/api/health"
 # Set your token once (use a demo token for local dev, or your own via API_TOKENS)
 TOKEN="test-token-admin"
 
-# Create a transfer  (requires transfers:write)
-curl -X POST http://localhost:3000/api/transfers \
+# Choose a new key for each new logical operation; retain it for retries.
+CREATE_KEY="example-create-1"
+
+# Create a transfer  (requires transfers:write); -i also displays its ETag.
+curl -i -X POST http://localhost:3000/api/transfers \
   -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: $CREATE_KEY" \
   -H "Content-Type: application/json" \
   -d '{"senderName":"Alice","recipientName":"Bob","amount":100,"from":"USD","to":"INR"}'
 
-# Claim a transfer  (requires transfers:write)
-curl -X POST http://localhost:3000/api/transfers/<id>/claim \
-  -H "Authorization: Bearer $TOKEN"
+# Copy the created transfer's id, then read its current ETag (requires transfers:read).
+TRANSFER_ID="replace-with-created-transfer-id"
+curl -i -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:3000/api/transfers/$TRANSFER_ID"
+
+# Copy that ETag verbatim, including its double quotes; "1" is only an example.
+TRANSFER_ETAG='"1"'
+CLAIM_KEY="example-claim-1"
+
+# Claim the transfer  (requires transfers:write).
+# An uncertain retry reuses this same CLAIM_KEY and original TRANSFER_ETAG.
+curl -i -X POST "http://localhost:3000/api/transfers/$TRANSFER_ID/claim" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "If-Match: $TRANSFER_ETAG" \
+  -H "Idempotency-Key: $CLAIM_KEY"
 
 # Search transfers by name and view aggregate stats  (requires transfers:read)
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/transfers?q=alice"
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/transfers/stats"
 
 # Archive and unarchive transfers  (requires transfers:write)
-curl -X POST http://localhost:3000/api/transfers/<id>/archive \
+curl -X POST "http://localhost:3000/api/transfers/$TRANSFER_ID/archive" \
   -H "Authorization: Bearer $TOKEN"
-curl -X POST http://localhost:3000/api/transfers/<id>/unarchive \
+curl -X POST "http://localhost:3000/api/transfers/$TRANSFER_ID/unarchive" \
   -H "Authorization: Bearer $TOKEN"
 
 # List only archived transfers  (requires transfers:read)

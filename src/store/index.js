@@ -19,10 +19,21 @@ const store = {
    * valid for the life of the process.
    */
   transferIndex: new OrderedIndex({ sortKeyOf: (transfer) => transfer.createdAt }),
-  // Keyed by "<actor> <idempotency-key>". Lives here rather than in a module
+  // Keyed by "<actor>\0<idempotency-key>". Lives here rather than in a module
   // local so it shares the transfers' lifetime: a replay can never outlive the
   // transfer it would replay.
   idempotency: new Map(),
+  // Actor-scoped receipts for terminal claim/cancel mutations. Isolated from
+  // create idempotency so a retry of a claim replays the terminal result
+  // without colliding with the key used to create the transfer.
+  lifecycleIdempotency: new Map(),
+  // Per-transfer leases held while a lifecycle mutation is between reservation
+  // and commit. Prevents two different operation keys from both calling the
+  // provider for the same transfer (the double-settlement window).
+  lifecycleLeases: new Map(),
+  // Provider settlement receipts keyed by stable operation id. Shared with the
+  // settlement worker so a module reload still returns the first artifact.
+  settlementReceipts: new Map(),
 };
 
 /** Remove all records from the store. Primarily used in tests/seeding. */
@@ -31,6 +42,9 @@ function reset() {
   store.transfers.clear();
   store.transferIndex.reset();
   store.idempotency.clear();
+  store.lifecycleIdempotency.clear();
+  store.lifecycleLeases.clear();
+  store.settlementReceipts.clear();
   auditService.reset();
 }
 
