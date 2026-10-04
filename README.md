@@ -37,6 +37,9 @@ The application is configured using environment variables (typically defined in 
 | `CORS_ORIGIN` | Allowed CORS origin | `*` |
 | `RATE_LIMIT_WINDOW_MS` | Time window for rate limiting (ms) | `60000` |
 | `RATE_LIMIT_MAX` | Max requests per window | `100` |
+| `RATE_LIMIT_MAX_KEYS` | Max distinct client identities retained by the global limiter | `10000` |
+| `TRUST_PROXY` | Honour `X-Forwarded-For` when resolving client IP (`true`/`1`) | `false` |
+| `MUTATION_RATE_LIMIT_*` | Per-actor budgets for transfer/user/quote/admin mutations (see `docs/ABUSE_CONTROLS.md`) | see docs |
 | `BODY_LIMIT` | Max JSON request body size | `100kb` |
 | `REQUEST_TIMEOUT_MS` | Request timeout before returning 503 (ms) | `15000` |
 | `DB_POOL_MIN` | Minimum database connections in pool | `2` |

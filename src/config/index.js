@@ -3,12 +3,26 @@
 require('dotenv').config();
 
 /**
+ * Parse a positive integer env var with a fallback.
+ * @param {string|undefined} value
+ * @param {number} fallback
+ * @returns {number}
+ */
+function intEnv(value, fallback) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
  * Centralized application configuration.
  * Values are read from environment variables with sensible defaults
  * so the app can boot even without a .env file present.
  */
+const env = process.env.NODE_ENV || 'development';
+const isTest = env === 'test';
+
 const config = {
-  env: process.env.NODE_ENV || 'development',
+  env,
   port: parseInt(process.env.PORT, 10) || 3000,
 
   baseCurrency: process.env.DEFAULT_BASE_CURRENCY || 'USD',
@@ -34,9 +48,44 @@ const config = {
   // Per-request time budget before a 503 is returned.
   requestTimeoutMs: parseInt(process.env.REQUEST_TIMEOUT_MS, 10) || 15 * 1000,
 
+  /**
+   * Whether to trust `X-Forwarded-For` when resolving the client IP.
+   * Off by default so untrusted clients cannot rotate IPs to bypass limits.
+   * Enable only behind a reverse proxy that strips/forges the header safely.
+   */
+  trustProxy: process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1',
+
   rateLimit: {
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 60 * 1000,
-    max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100,
+    windowMs: intEnv(process.env.RATE_LIMIT_WINDOW_MS, 60 * 1000),
+    max: intEnv(process.env.RATE_LIMIT_MAX, isTest ? 10_000 : 100),
+    maxKeys: intEnv(process.env.RATE_LIMIT_MAX_KEYS, 10_000),
+  },
+
+  /**
+   * Stricter per-actor budgets for mutation / expensive routes.
+   * Defaults are deliberately higher than a single integration test suite
+   * needs, while still bounding automated abuse of provider-backed paths.
+   */
+  mutationRateLimit: {
+    maxKeys: intEnv(process.env.MUTATION_RATE_LIMIT_MAX_KEYS, 10_000),
+    transfers: {
+      windowMs: intEnv(process.env.MUTATION_RATE_LIMIT_TRANSFERS_WINDOW_MS, 60 * 1000),
+      // Generous under test so the suite does not trip the abuse budget; production
+      // defaults stay tight enough to bound provider-quota exhaustion.
+      max: intEnv(process.env.MUTATION_RATE_LIMIT_TRANSFERS_MAX, isTest ? 10_000 : 30),
+    },
+    users: {
+      windowMs: intEnv(process.env.MUTATION_RATE_LIMIT_USERS_WINDOW_MS, 60 * 1000),
+      max: intEnv(process.env.MUTATION_RATE_LIMIT_USERS_MAX, isTest ? 10_000 : 20),
+    },
+    quote: {
+      windowMs: intEnv(process.env.MUTATION_RATE_LIMIT_QUOTE_WINDOW_MS, 60 * 1000),
+      max: intEnv(process.env.MUTATION_RATE_LIMIT_QUOTE_MAX, isTest ? 10_000 : 60),
+    },
+    admin: {
+      windowMs: intEnv(process.env.MUTATION_RATE_LIMIT_ADMIN_WINDOW_MS, 60 * 1000),
+      max: intEnv(process.env.MUTATION_RATE_LIMIT_ADMIN_MAX, isTest ? 10_000 : 30),
+    },
   },
 
   errorTracking: {

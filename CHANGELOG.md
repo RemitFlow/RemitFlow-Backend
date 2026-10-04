@@ -18,6 +18,13 @@ When preparing a new release:
 
 ### Added
 
+- Route-family mutation rate limits and sanitized correlation IDs for abuse
+  control on transfer writes, user writes, quote, and admin diagnostics.
+  Actor keys are truncated token fingerprints (never raw secrets); limiter
+  tables are bounded by `RATE_LIMIT_MAX_KEYS` /
+  `MUTATION_RATE_LIMIT_MAX_KEYS`. `TRUST_PROXY` gates `X-Forwarded-For`.
+  See `docs/ABUSE_CONTROLS.md`.
+
 - Cursor pagination for `GET /api/transfers` and `GET /api/audit`. Pass
   `?cursor=` (with optional `?order=asc|desc`) to page by an indexed position
   instead of a row offset; responses carry a `pageInfo` block with

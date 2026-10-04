@@ -23,6 +23,8 @@ function adminAuth(req, res, next) {
     return next(new ApiError(401, 'Unauthorized'));
   }
 
+  // Expose for downstream actor-keyed rate limiting (never log the raw value).
+  req.adminToken = token;
   next();
 }
 

@@ -1,0 +1,148 @@
+{
+  "node": "v24.19.0",
+  "parent": "f501ce5f4fd6f6f96c82fb9fffed4dc58f3def8e",
+  "before_blob": "6748ce8105628e781cccea40c368d2bb3a830b17",
+  "after_blob": "84c97f7b183c1c8e96be0695e5f332f9c2e3acca",
+  "semantic": {
+    "calls": 20000,
+    "resets": 629,
+    "capacities": [
+      1,
+      2,
+      7,
+      31,
+      256
+    ],
+    "outputs_identical": true,
+    "digest": "e33b264b79ca6ee6608a4bea3d2cd2c88fc3f8f1890205c16793019add83c124"
+  },
+  "counted": {
+    "before": {
+      "warm_ms": 40.84700099999998,
+      "rolling_ms": 441.346272,
+      "accepted": 11000,
+      "tracked": 10000,
+      "map_entry_visits": 10000000,
+      "output_digest": "4d3275de14312bc8d9ad15fa5c01bd8a8a76d8df612b5b37c31c3f86e5ce84a3"
+    },
+    "after": {
+      "warm_ms": 23.80022500000007,
+      "rolling_ms": 3.1638240000000906,
+      "accepted": 11000,
+      "tracked": 10000,
+      "map_entry_visits": 0,
+      "output_digest": "4d3275de14312bc8d9ad15fa5c01bd8a8a76d8df612b5b37c31c3f86e5ce84a3"
+    }
+  },
+  "pairs": [
+    {
+      "order": [
+        "before",
+        "after"
+      ],
+      "before": {
+        "warm_ms": 21.79057899999998,
+        "rolling_ms": 474.4274180000001,
+        "accepted": 11000,
+        "tracked": 10000,
+        "map_entry_visits": null,
+        "output_digest": "4d3275de14312bc8d9ad15fa5c01bd8a8a76d8df612b5b37c31c3f86e5ce84a3"
+      },
+      "after": {
+        "warm_ms": 20.588298000000123,
+        "rolling_ms": 2.465562000000091,
+        "accepted": 11000,
+        "tracked": 10000,
+        "map_entry_visits": null,
+        "output_digest": "4d3275de14312bc8d9ad15fa5c01bd8a8a76d8df612b5b37c31c3f86e5ce84a3"
+      }
+    },
+    {
+      "order": [
+        "after",
+        "before"
+      ],
+      "after": {
+        "warm_ms": 32.072959999999966,
+        "rolling_ms": 2.818273999999974,
+        "accepted": 11000,
+        "tracked": 10000,
+        "map_entry_visits": null,
+        "output_digest": "4d3275de14312bc8d9ad15fa5c01bd8a8a76d8df612b5b37c31c3f86e5ce84a3"
+      },
+      "before": {
+        "warm_ms": 19.74772299999995,
+        "rolling_ms": 224.3245569999999,
+        "accepted": 11000,
+        "tracked": 10000,
+        "map_entry_visits": null,
+        "output_digest": "4d3275de14312bc8d9ad15fa5c01bd8a8a76d8df612b5b37c31c3f86e5ce84a3"
+      }
+    },
+    {
+      "order": [
+        "before",
+        "after"
+      ],
+      "before": {
+        "warm_ms": 18.826625999999806,
+        "rolling_ms": 183.07371799999987,
+        "accepted": 11000,
+        "tracked": 10000,
+        "map_entry_visits": null,
+        "output_digest": "4d3275de14312bc8d9ad15fa5c01bd8a8a76d8df612b5b37c31c3f86e5ce84a3"
+      },
+      "after": {
+        "warm_ms": 107.33902499999999,
+        "rolling_ms": 4.7101410000000214,
+        "accepted": 11000,
+        "tracked": 10000,
+        "map_entry_visits": null,
+        "output_digest": "4d3275de14312bc8d9ad15fa5c01bd8a8a76d8df612b5b37c31c3f86e5ce84a3"
+      }
+    }
+  ],
+  "rolling_median_ms": {
+    "before": 224.3245569999999,
+    "after": 2.818273999999974,
+    "ratio": 79.59643278119941
+  },
+  "boundary": "Unmodified loaded middleware modules and retained real ApiError/clientIdentity dependencies; simulated clock/requests/responses. No Express, HTTP stack, dependency install, external service or fleet throughput measurement.",
+  "integration_validation": {
+    "node": "v24.19.0",
+    "lock_blob": "be3ad84b812121d2ec4f47541df3a55816bb210c",
+    "dependencies_reused_from_run": 37191775463,
+    "dependencies_artifact": 11299062132,
+    "checks": [
+      {
+        "command": "node --test test/abuseControls.test.js",
+        "reported_summary": {
+          "tests": 17,
+          "suites": 0,
+          "pass": 17,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0,
+          "todo": 0,
+          "duration_ms": 403.177995
+        },
+        "log_sha256": "e768d229d4136ad76c5762da86e92514644baf0c5c89b727ba091ada88c3a669"
+      },
+      {
+        "command": "npm test",
+        "reported_summary": {
+          "tests": 273,
+          "suites": 1,
+          "pass": 273,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 0,
+          "todo": 0,
+          "duration_ms": 2582.066949
+        },
+        "log_sha256": "dfc0d8041520deeff839ad360f72804b7fb8ba0382cfa5af03aba0d6d23a441f"
+      }
+    ],
+    "scope": "Maintained tests on all 178 exact parent files, composed with the two candidate source/test blobs; real Express loopback cases included. Original npm test command reported 273 passes. No deployed or provider acceptance claimed."
+  }
+}

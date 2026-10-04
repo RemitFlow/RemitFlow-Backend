@@ -5,6 +5,7 @@ const config = require('../config');
 const cacheControl = require('../middleware/cacheControl');
 const asyncHandler = require('../utils/asyncHandler');
 const validate = require('../middleware/validate');
+const mutationRateLimit = require('../middleware/mutationRateLimit');
 const rateController = require('../controllers/rateController');
 const { validateQuoteQuery } = require('../validators/quoteValidator');
 
@@ -25,8 +26,11 @@ router.get(
 );
 
 // GET /api/quote?amount=&from=&to=
+// Quote is public but provider-adjacent; apply a dedicated IP budget so bursts
+// cannot exhaust FX / settlement quotas shared with write paths.
 router.get(
   '/quote',
+  mutationRateLimit.quote,
   validate(validateQuoteQuery),
   asyncHandler(rateController.getQuote)
 );

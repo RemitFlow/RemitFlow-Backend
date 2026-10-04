@@ -30,7 +30,9 @@ function getDiagnostics(req, res) {
       fee: config.fee,
       maxTransferAmount: config.maxTransferAmount,
       stellar: config.stellar,
+      trustProxy: config.trustProxy,
       rateLimit: config.rateLimit,
+      mutationRateLimit: config.mutationRateLimit,
       errorTrackingEnabled: config.errorTracking.enabled,
     },
     stats: {
