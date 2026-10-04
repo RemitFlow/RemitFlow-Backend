@@ -135,7 +135,7 @@ function getTransfer(req, res) {
  * Mark a transfer as claimed by the recipient.
  */
 function claimTransfer(req, res) {
-  const transfer = transferService.claimTransfer(req.params.id, req.id);
+  const transfer = transferService.claimTransfer(req.params.id, req.id, req.token);
   res.json(transfer);
 }
 
@@ -144,7 +144,7 @@ function claimTransfer(req, res) {
  * Cancel a pending transfer.
  */
 function cancelTransfer(req, res) {
-  const transfer = transferService.cancelTransfer(req.params.id, req.id);
+  const transfer = transferService.cancelTransfer(req.params.id, req.id, req.token);
   res.json(transfer);
 }
 
@@ -153,7 +153,7 @@ function cancelTransfer(req, res) {
  * Archive a transfer, hiding it from default list results.
  */
 function archiveTransfer(req, res) {
-  const transfer = transferService.archiveTransfer(req.params.id);
+  const transfer = transferService.archiveTransfer(req.params.id, req.id, req.token);
   res.json(transfer);
 }
 
@@ -162,7 +162,7 @@ function archiveTransfer(req, res) {
  * Unarchive a transfer, restoring it to default list results.
  */
 function unarchiveTransfer(req, res) {
-  const transfer = transferService.unarchiveTransfer(req.params.id);
+  const transfer = transferService.unarchiveTransfer(req.params.id, req.id, req.token);
   res.json(transfer);
 }
 

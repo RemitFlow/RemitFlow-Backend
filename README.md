@@ -49,6 +49,7 @@ The application is configured using environment variables (typically defined in 
 | `PAGINATION_MAX_LIMIT` | Largest accepted `limit`; bigger requests are rejected | `200` |
 | `PAGINATION_MAX_SCAN` | Max records a single history query may examine | `10000` |
 | `PAGINATION_CURSOR_SECRET` | HMAC key used to sign pagination cursors | *(random per process)* |
+| `AUDIT_ACTOR_SECRET` | Secret used to fingerprint audit actors; read once at startup | `PAGINATION_CURSOR_SECRET`, then random per process |
 | `API_TOKENS` | JSON object mapping API tokens to their allowed scopes (see [Authentication](#authentication)) | *(demo tokens)* |
 
 
@@ -69,7 +70,7 @@ Authorization: Bearer <token>
 | `transfers:write` | `POST /api/transfers`, `POST /api/transfers/:id/claim`, `POST /api/transfers/:id/cancel`, `POST /api/transfers/:id/archive`, `POST /api/transfers/:id/unarchive` |
 | `users:read` | `GET /api/users`, `GET /api/users/:id` |
 | `users:write` | `POST /api/users` |
-| `audit:read` | `GET /api/audit` |
+| `audit:read` | `GET /api/audit`, `GET /api/audit/integrity` |
 
 ### Public endpoints (no token required)
 
@@ -293,6 +294,75 @@ exists.
 - `GET /api/users` — list users.
 - `GET /api/users/:id` — fetch one user.
 - `POST /api/users` — create a user. Body: `{ name, email, country? }`
+
+### Audit integrity and attribution
+
+`GET /api/audit` and `GET /api/audit/integrity` both require a Bearer API token
+with the `audit:read` scope. Set `TOKEN` to one of your configured tokens with
+that scope, then inspect the current chain:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:3000/api/audit/integrity"
+```
+
+The integrity endpoint returns HTTP `200` for both intact and invalid chains.
+Inspect the JSON `valid` field; a successful HTTP request alone does not mean
+that verification passed.
+
+| Field | Meaning |
+|-------|---------|
+| `valid` | Whether the current chain and compatibility aliases pass verification. |
+| `checked` | Number of entries verified before the report was returned. |
+| `tipHash` | The process's stored hash for the end of its chain. |
+| `brokenAt` | Zero-based chain position of a reported problem; `null` when valid. |
+| `reason` | Description of the reported problem; `null` when valid. |
+
+Verification walks the whole current process-local chain. Listing filters
+do not narrow the integrity check.
+
+Use `GET /api/audit` to investigate individual entries. It supports the
+[pagination parameters](#pagination) and these exact-match filters, combined
+when more than one is supplied. Empty filter strings are treated as absent.
+
+| Filter | Match against a returned entry |
+|--------|-------------------------------|
+| `resourceId` | Resource ID (the compatibility alias for `target`). |
+| `action` | Action such as `transfer.created` or `user.created`. |
+| `scope` | Event scope such as `transfers` or `users`. |
+| `outcome` | Recorded outcome such as `success`. |
+| `correlationId` | Correlation ID (also returned as `requestId`). |
+| `actor` | The exact opaque actor reference returned in `actor`. |
+
+First list entries, then copy a returned actor value into `ACTOR_REF`:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/audit?limit=50"
+# Set ACTOR_REF to an entry's returned actor value.
+curl --get -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode "actor=$ACTOR_REF" \
+  "http://localhost:3000/api/audit"
+```
+
+The actor filter does not fingerprint its query value. Keep the raw API token
+in the Authorization header and use the returned reference in the query.
+
+#### Actor secret and storage lifetime
+
+[Actor fingerprinting](src/utils/auditCrypto.js) reads its secret once when
+the module loads: nonempty `AUDIT_ACTOR_SECRET` takes precedence, then nonempty
+`PAGINATION_CURSOR_SECRET`, then a random secret generated for that process.
+Set the chosen value in the environment or `.env` before starting the server;
+restart the server after changing it. A fixed secret keeps token-derived actor
+references stable across restarts and instances; rotating it changes those
+references.
+
+The [audit service](src/services/auditService.js) keeps entries, duplicate-event
+identities and the chain tip in memory. Restarting or resetting the store
+clears that history. Each server process has its own chain: sharing the actor
+secret does not share or persist records. The integrity report checks this
+in-memory chain's internal consistency; it does not establish an externally
+anchored history or provide a persistence guarantee.
 
 ## Transfer lifecycle
 

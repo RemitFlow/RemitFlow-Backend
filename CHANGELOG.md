@@ -18,6 +18,16 @@ When preparing a new release:
 
 ### Added
 
+- Tamper-evident audit log: hash-chained `prevHash` / `entryHash` metadata,
+  `GET /api/audit/integrity` for authorized operators, and attribution fields
+  (`actor`, `scope`, `target`, `correlationId`, `outcome`, redacted `changes`).
+  Duplicate outcome events for the same privileged mutation (same action,
+  target, correlation id, and outcome) are suppressed. `GET /api/audit`
+  accepts `action`, `scope`, `outcome`, `correlationId`, and `actor` filters.
+  Secrets in changes are redacted at write time. Archive/unarchive now emit
+  outcome events. Optional `AUDIT_ACTOR_SECRET` (falls back to
+  `PAGINATION_CURSOR_SECRET`) fingerprints actors without storing raw tokens.
+
 - Cursor pagination for `GET /api/transfers` and `GET /api/audit`. Pass
   `?cursor=` (with optional `?order=asc|desc`) to page by an indexed position
   instead of a row offset; responses carry a `pageInfo` block with
@@ -54,6 +64,11 @@ When preparing a new release:
   pagination exists to avoid.
 
 ### Fixed
+
+- Privileged mutation audit actors now fingerprint raw credentials even when a
+  configured token starts with `actor:` or equals `system`. Transfer and user
+  services use the explicit `actorToken` audit input; legacy precomputed actor
+  references and token-scoped idempotent transfer replay remain supported.
 
 - Offset pagination over transfer and audit history repeated or skipped rows
   when records were written while a client was paging, because the window was

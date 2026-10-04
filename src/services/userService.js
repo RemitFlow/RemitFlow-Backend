@@ -45,7 +45,7 @@ function getUserOrThrow(id) {
  * @param {string} [requestId] - optional correlation id for audit logging
  * @returns {object}
  */
-function createUser(data, requestId) {
+function createUser(data, requestId, actor) {
   const user = {
     id: prefixedId('usr'),
     name: data.name,
@@ -60,6 +60,8 @@ function createUser(data, requestId) {
     resourceId: user.id,
     payload: { name: user.name, country: user.country },
     requestId,
+    actorToken: actor,
+    outcome: 'success',
   });
 
   return user;

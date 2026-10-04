@@ -281,6 +281,8 @@ function createTransferUnchecked(data, requestId, idempotency) {
       sendAmount: transfer.sendAmount,
     },
     requestId,
+    actorToken: idempotency ? idempotency.actor : undefined,
+    outcome: 'success',
   });
 
   if (idempotency) {
@@ -301,13 +303,18 @@ function createTransferUnchecked(data, requestId, idempotency) {
  * @param {string} nextStatus
  * @returns {object}
  */
-function transition(transfer, nextStatus) {
+function assertTransition(transfer, nextStatus) {
   const allowed = TRANSFER_TRANSITIONS[transfer.status] || [];
   if (!allowed.includes(nextStatus)) {
     throw ApiError.conflict(
       `Cannot change transfer from ${transfer.status} to ${nextStatus}`
     );
   }
+  return transfer;
+}
+
+function transition(transfer, nextStatus) {
+  assertTransition(transfer, nextStatus);
   transfer.status = nextStatus;
   transfer.updatedAt = nextTimestamp(transfer.updatedAt);
   return transfer;
@@ -319,16 +326,35 @@ function transition(transfer, nextStatus) {
  * @param {string} [requestId] - optional correlation id for audit logging
  * @returns {object}
  */
-function claimTransfer(id, requestId) {
+function claimTransfer(id, requestId, actor) {
   const transfer = getTransferOrThrow(id);
+  assertTransition(transfer, TRANSFER_STATUS.CLAIMED);
+  let claimableBalanceId;
+  try {
+    claimableBalanceId = stellarService.createClaimableBalanceId();
+  } catch (err) {
+    // Leave the pending transfer unchanged when the adapter fails. Retain an
+    // attributable outcome without copying exception text or credentials.
+    auditService.addEntry({
+      action: 'transfer.claimed',
+      resourceId: transfer.id,
+      payload: { stage: 'claim', code: 'CLAIM_ADAPTER_FAILED' },
+      requestId,
+      actorToken: actor,
+      outcome: 'failure',
+    });
+    throw err;
+  }
   transition(transfer, TRANSFER_STATUS.CLAIMED);
-  transfer.claimableBalanceId = stellarService.createClaimableBalanceId();
+  transfer.claimableBalanceId = claimableBalanceId;
 
   auditService.addEntry({
     action: 'transfer.claimed',
     resourceId: transfer.id,
     payload: { claimableBalanceId: transfer.claimableBalanceId },
     requestId,
+    actorToken: actor,
+    outcome: 'success',
   });
 
   return transfer;
@@ -340,7 +366,7 @@ function claimTransfer(id, requestId) {
  * @param {string} [requestId] - optional correlation id for audit logging
  * @returns {object}
  */
-function cancelTransfer(id, requestId) {
+function cancelTransfer(id, requestId, actor) {
   const transfer = getTransferOrThrow(id);
   transition(transfer, TRANSFER_STATUS.CANCELLED);
 
@@ -349,6 +375,8 @@ function cancelTransfer(id, requestId) {
     resourceId: transfer.id,
     payload: {},
     requestId,
+    actorToken: actor,
+    outcome: 'success',
   });
 
   return transfer;
@@ -361,12 +389,22 @@ function cancelTransfer(id, requestId) {
  * @param {string} id
  * @returns {object}
  */
-function archiveTransfer(id) {
+function archiveTransfer(id, requestId, actor) {
   const transfer = getTransferOrThrow(id);
   if (!transfer.archivedAt) {
     const timestamp = nextTimestamp(transfer.updatedAt);
     transfer.archivedAt = timestamp;
     transfer.updatedAt = timestamp;
+
+    auditService.addEntry({
+      action: 'transfer.archived',
+      resourceId: transfer.id,
+      payload: { archivedAt: transfer.archivedAt },
+      mutationId: transfer.updatedAt,
+      requestId,
+      actorToken: actor,
+      outcome: 'success',
+    });
   }
   return transfer;
 }
@@ -376,13 +414,24 @@ function archiveTransfer(id) {
  * @param {string} id
  * @returns {object}
  */
-function unarchiveTransfer(id) {
+function unarchiveTransfer(id, requestId, actor) {
   const transfer = getTransferOrThrow(id);
   if (!transfer.archivedAt) {
     throw ApiError.conflict(`Transfer is not archived: ${id}`);
   }
   transfer.archivedAt = null;
   transfer.updatedAt = nextTimestamp(transfer.updatedAt);
+
+  auditService.addEntry({
+    action: 'transfer.unarchived',
+    resourceId: transfer.id,
+    payload: {},
+    mutationId: transfer.updatedAt,
+    requestId,
+    actorToken: actor,
+    outcome: 'success',
+  });
+
   return transfer;
 }
 
