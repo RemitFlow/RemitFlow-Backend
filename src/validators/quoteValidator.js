@@ -1,37 +1,21 @@
 'use strict';
 
-const money = require('../utils/money');
+const currencyPolicy = require('../utils/currencyPolicy');
 
 /**
  * Validate query parameters for GET /api/quote.
+ * Uses the same currency policy as transfer creation so a preview that
+ * succeeds is always executable (and an unsupported pair fails before
+ * any FX math runs).
  * @param {import('express').Request} req
  * @returns {string[]} list of error messages.
  */
 function validateQuoteQuery(req) {
-  const errors = [];
   const { amount, from, to } = req.query;
-
-  if (amount === undefined) {
-    errors.push('amount is required');
-  } else if (!money.isPositiveAmount(amount)) {
-    errors.push('amount must be a positive number');
-  } else if (!money.isSafeAmount(amount)) {
-    errors.push('amount is outside the supported numeric range');
-  } else if (!money.hasValidPrecision(amount)) {
-    errors.push(`amount must have at most ${money.DECIMALS} decimal places`);
-  }
-
-  if (!from) {
-    errors.push('from currency is required');
-  }
-  if (!to) {
-    errors.push('to currency is required');
-  }
-  if (from && to && from === to) {
-    errors.push('from and to currencies must differ');
-  }
-
-  return errors;
+  // A successful preview must also pass the transfer amount ceiling.
+  return currencyPolicy.validateTransferPair(amount, from, to, {
+    enforceMax: true,
+  });
 }
 
 module.exports = {

@@ -1,10 +1,11 @@
 'use strict';
 
-const money = require('../utils/money');
-const config = require('../config');
+const currencyPolicy = require('../utils/currencyPolicy');
 
 /**
  * Validate the body for POST /api/transfers.
+ * Amount and currency rules come from the shared currency policy so the
+ * HTTP layer rejects the same inputs that settlement would reject.
  * @param {import('express').Request} req
  * @returns {string[]} list of error messages.
  */
@@ -19,26 +20,10 @@ function validateCreateTransfer(req) {
   if (!recipientName || typeof recipientName !== 'string') {
     errors.push('recipientName is required');
   }
-  if (amount === undefined) {
-    errors.push('amount is required');
-  } else if (!money.isPositiveAmount(amount)) {
-    errors.push('amount must be a positive number');
-  } else if (!money.isSafeAmount(amount)) {
-    errors.push('amount is outside the supported numeric range');
-  } else if (!money.hasValidPrecision(amount)) {
-    errors.push(`amount must have at most ${money.DECIMALS} decimal places`);
-  } else if (Number(amount) > config.maxTransferAmount) {
-    errors.push(`amount must not exceed ${config.maxTransferAmount}`);
-  }
-  if (!from) {
-    errors.push('from currency is required');
-  }
-  if (!to) {
-    errors.push('to currency is required');
-  }
-  if (from && to && from === to) {
-    errors.push('from and to currencies must differ');
-  }
+
+  errors.push(
+    ...currencyPolicy.validateTransferPair(amount, from, to, { enforceMax: true })
+  );
 
   return errors;
 }

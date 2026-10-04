@@ -2,6 +2,13 @@
 
 require('dotenv').config();
 
+// An explicit zero disables a fee component; only an unparseable value uses
+// its default. Keep the existing parsing behavior for other numeric settings.
+function parseFee(value, fallback) {
+  const parsed = parseFloat(value);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 /**
  * Centralized application configuration.
  * Values are read from environment variables with sensible defaults
@@ -14,8 +21,8 @@ const config = {
   baseCurrency: process.env.DEFAULT_BASE_CURRENCY || 'USD',
 
   fee: {
-    percent: parseFloat(process.env.TRANSFER_FEE_PERCENT) || 1.5,
-    flat: parseFloat(process.env.TRANSFER_FEE_FLAT) || 0.3,
+    percent: parseFee(process.env.TRANSFER_FEE_PERCENT, 1.5),
+    flat: parseFee(process.env.TRANSFER_FEE_FLAT, 0.3),
   },
 
   // Largest single transfer amount accepted (in the source currency).

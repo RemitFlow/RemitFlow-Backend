@@ -86,3 +86,43 @@ test('config respects cache environment variables', () => {
   }
 });
 
+for (const [label, percent, flat, expectedPercent, expectedFlat, fee, receiveAmount] of [
+  ['default fees', undefined, undefined, 1.5, 0.3, 1.8, 90.93],
+  ['blank fees', '', '', 1.5, 0.3, 1.8, 90.93],
+  ['unparseable fees', 'invalid', 'invalid', 1.5, 0.3, 1.8, 90.93],
+  ['zero percentage fee', '0', undefined, 0, 0.3, 0.3, 92.31],
+  ['zero flat fee', undefined, '0.00', 1.5, 0, 1.5, 91.2],
+  ['both fees waived', '0', '0', 0, 0, 0, 92.59],
+  ['custom fees', '2.5', '0.25', 2.5, 0.25, 2.75, 90.05],
+]) {
+  test(`config and quote honor ${label}`, () => {
+    const values = { TRANSFER_FEE_PERCENT: percent, TRANSFER_FEE_FLAT: flat };
+    const originalEnv = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+    const clearFeeModules = () => {
+      for (const path of [
+        '../src/config', '../src/utils/currencyPolicy',
+        '../src/services/rateService', '../src/services/quoteService',
+      ]) delete require.cache[require.resolve(path)];
+    };
+    try {
+      for (const [key, value] of Object.entries(values)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      clearFeeModules();
+      const config = require('../src/config');
+      const quote = require('../src/services/quoteService').getQuote(100, 'USD', 'EUR');
+      assert.equal(config.fee.percent, expectedPercent);
+      assert.equal(config.fee.flat, expectedFlat);
+      assert.equal(quote.fee, fee);
+      assert.equal(quote.amountAfterFee, 100 - fee);
+      assert.equal(quote.receiveAmount, receiveAmount);
+    } finally {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      clearFeeModules();
+    }
+  });
+}

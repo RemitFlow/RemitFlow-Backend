@@ -4,6 +4,10 @@
  * Money helpers.
  * All amounts are treated as plain numbers but rounded to a fixed
  * number of decimal places to avoid floating point surprises.
+ *
+ * Prefer `currencyPolicy.roundToCurrency` / `canonicalizeAmount` at API and
+ * settlement boundaries; the helpers here remain for shared arithmetic and
+ * for callers that do not yet have a currency code.
  */
 
 const DECIMALS = 2;
@@ -16,10 +20,11 @@ const MAX_SAFE_AMOUNT = Number.MAX_SAFE_INTEGER / 10 ** DECIMALS;
 /**
  * Round a numeric amount to the configured number of decimals.
  * @param {number} amount
+ * @param {number} [decimals]
  * @returns {number}
  */
-function round(amount) {
-  const factor = 10 ** DECIMALS;
+function round(amount, decimals = DECIMALS) {
+  const factor = 10 ** decimals;
   return Math.round((Number(amount) + Number.EPSILON) * factor) / factor;
 }
 
@@ -85,26 +90,45 @@ function clamp(amount, min, max) {
 
 /**
  * Compute `percent` percent of `amount`, rounded to the money precision.
+ * When a currency code is supplied, rounding uses that currency's minor
+ * units via currencyPolicy (lazy-required to avoid a circular import at
+ * module load).
  * @param {number} amount
  * @param {number} percent - e.g. 1.5 for 1.5%.
+ * @param {string} [currencyCode]
  * @returns {number}
  */
-function percentage(amount, percent) {
+function percentage(amount, percent, currencyCode) {
+  if (currencyCode) {
+    const currencyPolicy = require('./currencyPolicy');
+    return currencyPolicy.roundToCurrency(amount, currencyCode, {
+      multiplier: percent,
+      divisor: 100,
+    });
+  }
   return round(Number(amount) * (Number(percent) / 100));
 }
 
 /**
  * Format an amount with its currency code, e.g. "10.00 USD".
  * @param {number} amount
- * @param {string} currency
+ * @param {string} currencyCode
  * @returns {string}
  */
-function format(amount, currency) {
-  return `${round(amount).toFixed(DECIMALS)} ${currency}`;
+function format(amount, currencyCode) {
+  try {
+    const currencyPolicy = require('./currencyPolicy');
+    const meta = currencyPolicy.getMeta(currencyCode);
+    const rounded = currencyPolicy.roundToCurrency(amount, meta.code);
+    return `${rounded.toFixed(meta.minorUnits)} ${meta.code}`;
+  } catch {
+    return `${round(amount).toFixed(DECIMALS)} ${currencyCode}`;
+  }
 }
 
 module.exports = {
   DECIMALS,
+  MAX_SAFE_AMOUNT,
   round,
   isPositiveAmount,
   isSafeAmount,

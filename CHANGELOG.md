@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+- Centralize amount/currency validation via a shared currency policy (minor units, min/max, unsupported codes) so quote preview matches transfer settlement (#130).
+
 ## Release Process
 
 When preparing a new release:
@@ -55,6 +60,11 @@ When preparing a new release:
 
 ### Fixed
 
+- Structured JSON or query values for amounts and currencies now produce
+  ordinary validation errors without invoking their conversion properties.
+  Invalid input remains rejected before settlement, transfer/audit insertion,
+  or idempotency reservation; valid numeric strings and currency codes retain
+  the shared precision, fee, and payout policy.
 - Offset pagination over transfer and audit history repeated or skipped rows
   when records were written while a client was paging, because the window was
   defined by a row count rather than a position. Cursor pagination anchors to

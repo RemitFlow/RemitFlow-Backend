@@ -1,0 +1,113 @@
+{
+  "node": "v24.19.0",
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "baseline_source_sha256": "040866fa299d0b3d62c5ccb4bc22b0682b6966c0a11a9e59fb17057a1e35a95b",
+  "candidate_source_sha256": "ff9e3fe1ed70d579a34d05b881fabc4f3428bd37a061711f7f94ab168bb7835a",
+  "fee": {
+    "percent": 1.5,
+    "flat": 0.3
+  },
+  "max_transfer_amount": 50000,
+  "compatibility": "Exact values, errors and all quote fields matched before timing.",
+  "measurements": [
+    {
+      "workload": "minor-unit rounding",
+      "iterations": 74349,
+      "batches": {
+        "baseline": [
+          94.15192900000001,
+          135.454968,
+          92.80855700000001,
+          131.19849899999997,
+          99.84461099999999,
+          97.00193600000011,
+          119.84274099999993
+        ],
+        "candidate": [
+          73.71571,
+          90.14800199999996,
+          111.95667800000001,
+          105.47371699999997,
+          64.20043299999998,
+          65.52026999999998,
+          101.883061
+        ]
+      },
+      "baseline_median_ms": 99.84461099999999,
+      "candidate_median_ms": 90.14800199999996,
+      "baseline_ops_per_second": 744647.0996817246,
+      "candidate_ops_per_second": 824743.7364169206,
+      "throughput_gain_percent": 10.75632158769313
+    },
+    {
+      "workload": "USD/EUR quote",
+      "iterations": 12566,
+      "batches": {
+        "baseline": [
+          91.27773200000001,
+          135.25354400000015,
+          101.85128299999997,
+          108.40028299999994,
+          130.87884699999995,
+          89.10906299999988,
+          90.75208500000008
+        ],
+        "candidate": [
+          74.10715899999991,
+          174.15487699999994,
+          83.73231200000009,
+          76.4790710000002,
+          103.46399099999962,
+          98.07308400000011,
+          99.433673
+        ]
+      },
+      "baseline_median_ms": 101.85128299999997,
+      "candidate_median_ms": 98.07308400000011,
+      "baseline_ops_per_second": 123375.96179323537,
+      "candidate_ops_per_second": 128128.93698744077,
+      "throughput_gain_percent": 3.8524321311236065
+    },
+    {
+      "workload": "JPY/USD quote",
+      "iterations": 14462,
+      "batches": {
+        "baseline": [
+          121.19389499999988,
+          113.82723499999975,
+          121.73495999999977,
+          120.18448599999965,
+          400.0112469999999,
+          115.10252899999978,
+          115.16700599999967
+        ],
+        "candidate": [
+          71.22120399999994,
+          48.92068700000027,
+          68.60766000000012,
+          59.67435800000021,
+          151.6297569999997,
+          62.00409099999979,
+          61.46536599999945
+        ]
+      },
+      "baseline_median_ms": 120.18448599999965,
+      "candidate_median_ms": 62.00409099999979,
+      "baseline_ops_per_second": 120331.67076156603,
+      "candidate_ops_per_second": 233242.67426160717,
+      "throughput_gain_percent": 93.83315529938187
+    }
+  ],
+  "last_result": {
+    "from": "JPY",
+    "to": "USD",
+    "sendAmount": 40029,
+    "fee": 601,
+    "amountAfterFee": 39428,
+    "rate": 0.0067,
+    "receiveAmount": 264.17
+  },
+  "baseline_repository_blob": "654886208d3dc2bec0459fe3fb14526fa0f95218",
+  "baseline_repository_sha256": "37ccb6543eaa07407d20a0d29caa730bf606392facc74de8f0ead8157e0b2abf",
+  "baseline_materialization": "Pinned source plus one trailing newline; executable source is unchanged."
+}
