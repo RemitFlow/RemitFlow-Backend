@@ -18,6 +18,12 @@ When preparing a new release:
 
 ### Added
 
+- Dependency-aware readiness diagnostics: `GET /api/health/ready` now probes
+  store, payments (Stellar), and FX under a per-check timeout
+  (`HEALTH_CHECK_TIMEOUT_MS`), returns redacted reason codes on failure, and
+  recovers without a process restart. Liveness (`GET /api/health/live`) stays
+  process-only so orchestrators do not flap restarts during dependency outages.
+
 - Cursor pagination for `GET /api/transfers` and `GET /api/audit`. Pass
   `?cursor=` (with optional `?order=asc|desc`) to page by an indexed position
   instead of a row offset; responses carry a `pageInfo` block with

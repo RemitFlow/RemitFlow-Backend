@@ -227,9 +227,21 @@ The API implements Cache-Control response headers for security and efficiency:
 
 ### Health
 
-- `GET /api/health` — service health snapshot (version, uptime, env).
-- `GET /api/health/live` — liveness probe.
-- `GET /api/health/ready` — readiness probe with dependency checks.
+- `GET /api/health` — service health snapshot (version, uptime, env). Not a dependency gate.
+- `GET /api/health/live` (also `HEAD`) — liveness probe. Process-only; stays responsive during dependency outages
+  and exhausted API quotas. Liveness polls do not consume the business API budget. Common security, cache,
+  parsing, timeout, request-ID and logging middleware still apply. Readiness, health snapshots and business
+  routes retain the API quota; unmatched methods or subpaths continue through the existing route stack.
+- `GET /api/health/ready` — readiness probe with bounded checks for store, payments (Stellar), and FX.
+  Returns `200` when ready and `503` with redacted reason codes when a dependency is down or times out.
+  Probes re-run on every request so recovery does not require a restart.
+  Tune the per-check budget with `HEALTH_CHECK_TIMEOUT_MS` (default `1000`).
+  Payment and FX `ping()` adapters may return their result immediately or as a Promise;
+  the default probes await that result before checking `ok`. Rejections remain attached
+  to the readiness error path, including after a timeout. The deadline bounds waiting,
+  but does not cancel the underlying Promise or interrupt synchronous blocking work.
+  The shipped adapters remain synchronous mocks: Stellar configuration and loaded FX
+  data checks do not establish live provider reachability.
 - `GET /api/version` — service name and version.
 
 ### Rates & quotes

@@ -69,6 +69,13 @@ const config = {
     maxScan: parseInt(process.env.PAGINATION_MAX_SCAN, 10) || 10000,
   },
 
+
+  health: {
+    // Per-dependency budget for readiness probes. Must stay well below the
+    // request timeout so a hung dependency cannot stall the readiness route.
+    checkTimeoutMs: parseInt(process.env.HEALTH_CHECK_TIMEOUT_MS, 10) || 1000,
+  },
+
   apiTokens: (() => {
     try {
       if (process.env.API_TOKENS) {

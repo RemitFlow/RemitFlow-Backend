@@ -57,11 +57,14 @@ test('health liveness probe returns alive', async () => {
   assert.equal(body.status, 'alive');
 });
 
-test('health readiness probe returns ready', async () => {
+test('health readiness probe returns ready with dependency checks', async () => {
   const { status, body } = await fetchJson('/api/health/ready');
   assert.equal(status, 200);
   assert.equal(body.status, 'ready');
-  assert.deepEqual(body.checks, { store: 'ok' });
+  assert.equal(body.checks.store.status, 'ok');
+  assert.equal(body.checks.payments.status, 'ok');
+  assert.equal(body.checks.fx.status, 'ok');
+  assert.ok(typeof body.timeoutMs === 'number');
 });
 
 test('version endpoint returns name and version', async () => {

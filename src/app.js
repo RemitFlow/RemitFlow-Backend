@@ -6,6 +6,7 @@ const morgan = require('morgan');
 
 const config = require('./config');
 const routes = require('./routes');
+const healthController = require('./controllers/healthController');
 const securityHeaders = require('./middleware/securityHeaders');
 const cacheControl = require('./middleware/cacheControl');
 const requestTimeout = require('./middleware/requestTimeout');
@@ -45,6 +46,11 @@ function createApp() {
     app.use(morgan('dev'));
   }
   app.use(requestLogger);
+
+  // Process liveness must not consume or depend on the business API budget.
+  // Express also serves HEAD through this GET route; other paths/methods
+  // continue through the normal API middleware below.
+  app.get('/api/health/live', healthController.getLiveness);
 
   // Basic abuse protection on the API surface.
   app.use('/api', rateLimit(config.rateLimit));

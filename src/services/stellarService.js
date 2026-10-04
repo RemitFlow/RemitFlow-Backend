@@ -12,6 +12,22 @@ const logger = require('../utils/logger');
  */
 
 /**
+ * Lightweight payment-provider probe used by readiness checks.
+ * Validates that the Stellar network configuration is present so a
+ * misconfigured process fails readiness instead of reporting healthy.
+ * @returns {{ ok: true, network: string }}
+ */
+function ping() {
+  const network = config.stellar && config.stellar.network;
+  if (typeof network !== 'string' || network.trim() === '') {
+    const err = new Error('stellar network not configured');
+    err.reasonCode = 'PAYMENTS_UNAVAILABLE';
+    throw err;
+  }
+  return { ok: true, network };
+}
+
+/**
  * Pretend to submit a payment to the Stellar network.
  * @param {object} params
  * @param {number} params.amount
@@ -36,6 +52,7 @@ function createClaimableBalanceId() {
 }
 
 module.exports = {
+  ping,
   submitPayment,
   createClaimableBalanceId,
 };
