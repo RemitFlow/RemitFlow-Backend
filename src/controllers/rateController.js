@@ -10,12 +10,14 @@ const ApiError = require('../utils/ApiError');
 
 /**
  * GET /api/rates
- * Returns the supported currencies and their USD rate.
+ * Returns the supported currencies and their USD rate, plus freshness.
  */
 function getRates(req, res) {
+  const listed = rateService.listRates();
   res.json({
     base: 'USD',
-    rates: rateService.listRates(),
+    rates: listed.rates,
+    freshness: listed.freshness,
   });
 }
 
@@ -33,7 +35,7 @@ function getRatePair(req, res) {
 
 /**
  * GET /api/quote?amount=&from=&to=
- * Returns an FX quote including the fee breakdown.
+ * Returns an FX quote including the fee breakdown, quote identity, and freshness.
  */
 function getQuote(req, res) {
   const { amount, from, to } = req.query;

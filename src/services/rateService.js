@@ -1,51 +1,99 @@
 'use strict';
 
-const { RATES_TO_USD, SUPPORTED_CURRENCIES } = require('../config/rates');
+const { SUPPORTED_CURRENCIES } = require('../config/rates');
 const money = require('../utils/money');
 const currency = require('../utils/currency');
 const ApiError = require('../utils/ApiError');
+const fxCacheService = require('./fxCacheService');
 
 /**
- * Foreign exchange helpers built on top of the mock rate table.
+ * Foreign exchange helpers built on the cached FX provider snapshot.
+ *
+ * Callers that only need a number keep using getRate/convert/getPair. Paths
+ * that must expose freshness (quotes, rate list responses) use the snapshot
+ * helpers so stale data is visible rather than silent.
  */
 
 /**
- * Return the full list of supported currencies and their USD rate.
- * @returns {Array<{currency: string, rateToUsd: number}>}
+ * @param {object} [opts]
+ * @param {number} [opts.now]
+ * @param {'reject_stale'|'allow_stale'} [opts.policy]
  */
-function listRates() {
-  return SUPPORTED_CURRENCIES.map((currency) => ({
-    currency,
-    rateToUsd: RATES_TO_USD[currency],
-  }));
+function getSnapshot(opts = {}) {
+  return fxCacheService.getSnapshot({
+    now: opts.now,
+    policy: opts.policy || 'reject_stale',
+  });
 }
 
 /**
- * Check whether a currency code is supported.
- * @param {string} currency
+ * Return supported currencies and their USD rate, plus freshness metadata.
+ * Display-oriented: may surface a visibly-stale snapshot during outage.
+ * @param {object} [opts]
+ * @returns {{ rates: Array<{currency: string, rateToUsd: number}>, freshness: object }}
+ */
+function listRates(opts = {}) {
+  const snapshot = getSnapshot({ ...opts, policy: opts.policy || 'allow_stale' });
+  return {
+    rates: SUPPORTED_CURRENCIES.map((code) => ({
+      currency: code,
+      rateToUsd: snapshot.ratesToUsd[code],
+    })),
+    freshness: {
+      status: snapshot.status,
+      stale: snapshot.stale,
+      providerId: snapshot.providerId,
+      fetchedAt: new Date(snapshot.fetchedAt).toISOString(),
+      expiresAt: new Date(snapshot.expiresAt).toISOString(),
+      ageMs: snapshot.ageMs,
+      cacheHit: snapshot.cacheHit,
+      source: snapshot.source,
+    },
+  };
+}
+
+/**
+ * Check configured currencies before inspecting any provider-added codes.
+ * Known currencies need no decorated snapshot or rate-table copy. Validation
+ * remains available during provider outages and never initiates a live pull.
+ * @param {string} code
  * @returns {boolean}
  */
-function isSupported(currency) {
-  return Object.prototype.hasOwnProperty.call(RATES_TO_USD, currency);
+function isSupported(code) {
+  const normalized = currency.normalize(code);
+  if (!normalized) return false;
+  if (SUPPORTED_CURRENCIES.includes(normalized)) return true;
+  const peeked = fxCacheService.peek();
+  if (peeked && Object.prototype.hasOwnProperty.call(peeked.ratesToUsd, normalized)) {
+    return true;
+  }
+  return false;
 }
 
 /**
  * Compute the exchange rate to convert one unit of `from` into `to`.
+ * Uses reject_stale so transfer pricing never silently consumes expired data.
  * @param {string} from
  * @param {string} to
+ * @param {object} [opts]
  * @returns {number}
  */
-function getRate(from, to) {
+function getRate(from, to, opts = {}) {
   const fromCode = currency.normalize(from);
   const toCode = currency.normalize(to);
-  if (!isSupported(fromCode)) {
+  const snapshot = getSnapshot({
+    now: opts.now,
+    policy: opts.policy || 'reject_stale',
+  });
+
+  if (!Object.prototype.hasOwnProperty.call(snapshot.ratesToUsd, fromCode)) {
     throw ApiError.badRequest(`Unsupported source currency: ${from}`);
   }
-  if (!isSupported(toCode)) {
+  if (!Object.prototype.hasOwnProperty.call(snapshot.ratesToUsd, toCode)) {
     throw ApiError.badRequest(`Unsupported target currency: ${to}`);
   }
-  // Convert source -> USD -> target.
-  return RATES_TO_USD[fromCode] / RATES_TO_USD[toCode];
+
+  return snapshot.ratesToUsd[fromCode] / snapshot.ratesToUsd[toCode];
 }
 
 /**
@@ -53,26 +101,52 @@ function getRate(from, to) {
  * @param {number} amount
  * @param {string} from
  * @param {string} to
+ * @param {object} [opts]
  * @returns {number}
  */
-function convert(amount, from, to) {
-  const rate = getRate(from, to);
+function convert(amount, from, to, opts = {}) {
+  const rate = getRate(from, to, opts);
   return money.round(amount * rate);
 }
 
 /**
- * Describe a single currency pair, e.g. "USD-INR".
+ * Describe a single currency pair, e.g. "USD-INR", with freshness.
  * @param {string} from
  * @param {string} to
- * @returns {{ from: string, to: string, rate: number }}
+ * @param {object} [opts]
+ * @returns {object}
  */
-function getPair(from, to) {
+function getPair(from, to, opts = {}) {
   const fromCode = currency.normalize(from);
   const toCode = currency.normalize(to);
+  const snapshot = getSnapshot({
+    now: opts.now,
+    policy: opts.policy || 'allow_stale',
+  });
+
+  if (!Object.prototype.hasOwnProperty.call(snapshot.ratesToUsd, fromCode)) {
+    throw ApiError.badRequest(`Unsupported source currency: ${from}`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(snapshot.ratesToUsd, toCode)) {
+    throw ApiError.badRequest(`Unsupported target currency: ${to}`);
+  }
+
+  const rate = snapshot.ratesToUsd[fromCode] / snapshot.ratesToUsd[toCode];
   return {
     from: fromCode,
     to: toCode,
-    rate: money.round(getRate(fromCode, toCode)),
+    // Applying minor-unit rounding here can turn a valid FX rate into zero.
+    rate,
+    freshness: {
+      status: snapshot.status,
+      stale: snapshot.stale,
+      providerId: snapshot.providerId,
+      fetchedAt: new Date(snapshot.fetchedAt).toISOString(),
+      expiresAt: new Date(snapshot.expiresAt).toISOString(),
+      ageMs: snapshot.ageMs,
+      cacheHit: snapshot.cacheHit,
+      source: snapshot.source,
+    },
   };
 }
 
@@ -82,4 +156,5 @@ module.exports = {
   getRate,
   convert,
   getPair,
+  getSnapshot,
 };

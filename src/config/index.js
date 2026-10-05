@@ -59,6 +59,16 @@ const config = {
     ratesMaxAge: parseInt(process.env.CACHE_RATES_MAX_AGE_SECONDS, 10) || 10,
   },
 
+  // FX provider cache: bounded TTL, stale grace, and transfer pricing policy.
+  // Transfers reject stale rates by default so an outage cannot silently price
+  // a remittance on an expired quote. Display paths may opt into allow_stale.
+  fx: {
+    cacheTtlMs: parseInt(process.env.FX_CACHE_TTL_MS, 10) || 30 * 1000,
+    staleGraceMs: parseInt(process.env.FX_STALE_GRACE_MS, 10) || 60 * 1000,
+    allowStaleForTransfers: process.env.FX_ALLOW_STALE_TRANSFERS === 'true',
+    quoteTtlMs: parseInt(process.env.FX_QUOTE_TTL_MS, 10) || 60 * 1000,
+  },
+
   pagination: {
     // Page size used when a request does not ask for one.
     defaultLimit: parseInt(process.env.PAGINATION_DEFAULT_LIMIT, 10) || 50,

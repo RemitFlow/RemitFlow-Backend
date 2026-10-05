@@ -39,6 +39,9 @@ function validateCreateTransfer(req) {
   if (from && to && from === to) {
     errors.push('from and to currencies must differ');
   }
+  if (body.quoteId != null && (typeof body.quoteId !== 'string' || body.quoteId.trim() === '')) {
+    errors.push('quoteId must be a non-empty string when provided');
+  }
 
   return errors;
 }

@@ -58,6 +58,8 @@ function createTransfer(req, res) {
     amount: Number(req.body.amount),
     from: req.body.from,
     to: req.body.to,
+    // quoteId is part of the priced operation when the client binds one.
+    quoteId: req.body.quoteId || null,
   });
 
   const transfer = transferService.createTransfer(req.body, req.id, {

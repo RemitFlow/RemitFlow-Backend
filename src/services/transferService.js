@@ -243,7 +243,10 @@ function createTransfer(data, requestId, idempotency) {
  * @returns {object}
  */
 function createTransferUnchecked(data, requestId, idempotency) {
-  const quote = quoteService.getQuote(data.amount, data.from, data.to);
+  // Bind transfer pricing to a versioned quote identity. When the client
+  // supplies quoteId we enforce match + reject_stale policy; otherwise we mint
+  // a fresh quote so every transfer still carries quote provenance.
+  const quote = quoteService.resolveForTransfer(data);
   const settlement = stellarService.submitPayment({
     amount: quote.sendAmount,
     currency: quote.from,
@@ -259,6 +262,11 @@ function createTransferUnchecked(data, requestId, idempotency) {
     fee: quote.fee,
     rate: quote.rate,
     receiveAmount: quote.receiveAmount,
+    quoteId: quote.quoteId,
+    quoteVersion: quote.quoteVersion,
+    rateProvider: quote.freshness && quote.freshness.providerId,
+    rateFetchedAt: quote.freshness && quote.freshness.fetchedAt,
+    rateStale: Boolean(quote.stale),
     status: TRANSFER_STATUS.PENDING,
     stellar: settlement,
     createdAt: new Date().toISOString(),

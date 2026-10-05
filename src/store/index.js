@@ -3,6 +3,16 @@
 const auditService = require('../services/auditService');
 const { OrderedIndex } = require('../utils/orderedIndex');
 
+// Lazy requires avoid a circular init with quoteService -> store.
+function resetFxState() {
+  const fxCacheService = require('../services/fxCacheService');
+  const fxProviders = require('../services/fxProviders');
+  const quoteService = require('../services/quoteService');
+  fxCacheService.reset();
+  fxProviders.resetProviders();
+  quoteService.resetQuoteVersions();
+}
+
 /**
  * Simple in-memory data store.
  * Data lives only for the lifetime of the process; restarting the
@@ -23,6 +33,8 @@ const store = {
   // local so it shares the transfers' lifetime: a replay can never outlive the
   // transfer it would replay.
   idempotency: new Map(),
+  // Versioned FX quotes awaiting transfer binding. GC'd by quoteService.
+  quotes: new Map(),
 };
 
 /** Remove all records from the store. Primarily used in tests/seeding. */
@@ -31,7 +43,9 @@ function reset() {
   store.transfers.clear();
   store.transferIndex.reset();
   store.idempotency.clear();
+  store.quotes.clear();
   auditService.reset();
+  resetFxState();
 }
 
 module.exports = {

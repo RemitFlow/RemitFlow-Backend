@@ -86,3 +86,48 @@ test('config respects cache environment variables', () => {
   }
 });
 
+
+
+test('config loads default FX cache options', () => {
+  delete require.cache[require.resolve('../src/config')];
+  const config = require('../src/config');
+
+  assert.ok(config.fx);
+  assert.equal(config.fx.cacheTtlMs, 30 * 1000);
+  assert.equal(config.fx.staleGraceMs, 60 * 1000);
+  assert.equal(config.fx.allowStaleForTransfers, false);
+  assert.equal(config.fx.quoteTtlMs, 60 * 1000);
+});
+
+test('config respects FX environment variables', () => {
+  const originalEnv = {
+    FX_CACHE_TTL_MS: process.env.FX_CACHE_TTL_MS,
+    FX_STALE_GRACE_MS: process.env.FX_STALE_GRACE_MS,
+    FX_ALLOW_STALE_TRANSFERS: process.env.FX_ALLOW_STALE_TRANSFERS,
+    FX_QUOTE_TTL_MS: process.env.FX_QUOTE_TTL_MS,
+  };
+
+  try {
+    process.env.FX_CACHE_TTL_MS = '5000';
+    process.env.FX_STALE_GRACE_MS = '15000';
+    process.env.FX_ALLOW_STALE_TRANSFERS = 'true';
+    process.env.FX_QUOTE_TTL_MS = '9000';
+
+    delete require.cache[require.resolve('../src/config')];
+    const config = require('../src/config');
+
+    assert.equal(config.fx.cacheTtlMs, 5000);
+    assert.equal(config.fx.staleGraceMs, 15000);
+    assert.equal(config.fx.allowStaleForTransfers, true);
+    assert.equal(config.fx.quoteTtlMs, 9000);
+  } finally {
+    for (const key of Object.keys(originalEnv)) {
+      if (originalEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = originalEnv[key];
+      }
+    }
+    delete require.cache[require.resolve('../src/config')];
+  }
+});

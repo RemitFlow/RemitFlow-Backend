@@ -45,6 +45,10 @@ The application is configured using environment variables (typically defined in 
 | `DB_POOL_CONNECTION_TIMEOUT_MS` | Time to wait for a connection before timing out (ms) | `2000` |
 | `CACHE_DEFAULT_POLICY` | Default cache policy for endpoints (`no-store`, `public`, `private`) | `no-store` |
 | `CACHE_RATES_MAX_AGE_SECONDS` | Cache duration for rates endpoints (seconds) | `10` |
+| `FX_CACHE_TTL_MS` | FX snapshot freshness window from the provider timestamp (ms) | `30000` |
+| `FX_STALE_GRACE_MS` | Additional window for visibly stale display data (ms) | `60000` |
+| `FX_QUOTE_TTL_MS` | Lifetime of an issued quote for transfer binding (ms) | `60000` |
+| `FX_ALLOW_STALE_TRANSFERS` | Accept an explicitly bound stale quote only within FX grace and its quote lifetime; enabled only by `true` | `false` |
 | `PAGINATION_DEFAULT_LIMIT` | Page size used when a request omits `limit` | `50` |
 | `PAGINATION_MAX_LIMIT` | Largest accepted `limit`; bigger requests are rejected | `200` |
 | `PAGINATION_MAX_SCAN` | Max records a single history query may examine | `10000` |
@@ -244,10 +248,72 @@ at most 2 decimal places (e.g. `100.129` is rejected with a 400). This
 prevents floating-point/sub-cent precision loss from being silently
 rounded away.
 
+#### Quote freshness and binding
+
+Rates and quotes expose `freshness`, including `status`, `stale`, `providerId`,
+`fetchedAt`, `expiresAt`, and `ageMs`. Quotes also return `quoteId`,
+`quoteVersion`, `stale`, `quoteCreatedAt`, and `quoteExpiresAt`. Show stale
+data as stale; receiving a display quote does not guarantee transfer acceptance.
+
+`FX_CACHE_TTL_MS` measures freshness from the provider's `fetchedAt`, not from
+the most recent HTTP request. A successful fetch of an old snapshot does not
+renew its timestamp. Staleness begins at `freshness.expiresAt`; the grace
+window ends at that timestamp plus `FX_STALE_GRACE_MS`. The separate
+`quoteExpiresAt` also limits transfer use. Neither the grace window nor the
+quote lifetime includes its end timestamp.
+
+| Request | Pricing behavior |
+|---------|------------------|
+| `GET /api/rates`, `GET /api/rates/:pair`, `GET /api/quote` | May return visibly stale data strictly within the FX grace window. |
+| New transfer with `quoteId` | Binds the issued quote's original terms; amount and normalized currencies must match, and current freshness and quote expiry are checked again. |
+| New transfer without `quoteId` | Intentionally mints and binds a fresh quote at creation. This supported compatibility path does not reuse an earlier displayed quote. |
+
+To bind terms the sender has reviewed:
+
+1. Request `GET /api/quote?amount=100&from=USD&to=INR` and retain its
+   `quoteId`, price/fee breakdown, and expiry metadata.
+2. Include that `quoteId` in the transfer body alongside the same amount,
+   `from`, and `to`. Supply the normal Bearer token and `Idempotency-Key`.
+   The response records `quoteId`, `quoteVersion`, `rateProvider`,
+   `rateFetchedAt`, and `rateStale`.
+3. If the request's outcome is unknown, retry the same key and body, including
+   `quoteId`. A completed retry replays the stored transfer without requoting.
+   `quoteId` is part of the idempotency fingerprint; changing it under a
+   completed key is a different-payload conflict.
+4. After `QUOTE_EXPIRED` or `QUOTE_STALE`, fetch and review a new quote before
+   choosing new terms. Omitting `quoteId` deliberately selects fresh pricing
+   instead of preserving the previously displayed terms.
+
+With the default `FX_ALLOW_STALE_TRANSFERS=false`, stale FX is rejected for
+transfer pricing. Setting it to exactly `true` permits an explicitly bound
+stale quote only while both its FX grace window and quote lifetime remain
+valid. The no-`quoteId` path still requires a fresh snapshot.
+
+FX/quote failures use the normal `error.details.code` field:
+
+| HTTP status | Code | Meaning |
+|-------------|------|---------|
+| `404` | `QUOTE_NOT_FOUND` | The supplied quote is not retained by this process; request a new quote. |
+| `409` | `QUOTE_EXPIRED` | The quote lifetime has ended; request and review a new quote. |
+| `409` | `QUOTE_STALE` | The bound snapshot is outside the configured transfer freshness policy. |
+| `409` | `QUOTE_MISMATCH` | The transfer amount or currencies differ from the bound quote. |
+| `503` | `FX_PROVIDERS_DOWN` | No provider/cache snapshot is usable under the requested policy. |
+| `503` | `FX_REFRESH_IN_PROGRESS` | A refresh is already running and no cached snapshot is usable under the requested policy. |
+
+These FX settings are read at startup; restart after changing them.
+`CACHE_RATES_MAX_AGE_SECONDS` controls HTTP response caching and does not
+extend FX freshness or a quote's lifetime. The built-in primary and fallback
+providers wrap the same static demo rate table. Cache entries and quote IDs
+are process-local, disappear on restart, and are not shared across replicas.
+The bounded quote map can also evict an unexpired quote, so clients must handle
+`QUOTE_NOT_FOUND` rather than assuming retention until `quoteExpiresAt`.
+
 ### Transfers
 
 - `POST /api/transfers` — create a transfer.
   Body: `{ senderName, recipientName, amount, from, to }`
+  Optional `quoteId` binds a previously issued quote; omission mints a fresh one
+  (see [Quote freshness and binding](#quote-freshness-and-binding)).
   Requires an `Idempotency-Key` header (see below).
 - `GET /api/transfers` — list transfers. Supports `?status=`, `?q=` (name
   search), `?archived=` (true/false/all), and [cursor pagination](#pagination)
@@ -321,9 +387,12 @@ curl "http://localhost:3000/api/health"
 # Set your token once (use a demo token for local dev, or your own via API_TOKENS)
 TOKEN="test-token-admin"
 
-# Create a transfer  (requires transfers:write)
+# Create a transfer with fresh pricing (requires transfers:write)
+# Choose a new key for each logical transfer; keep it and the body on retries.
+TRANSFER_KEY="demo-transfer-001"
 curl -X POST http://localhost:3000/api/transfers \
   -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: $TRANSFER_KEY" \
   -H "Content-Type: application/json" \
   -d '{"senderName":"Alice","recipientName":"Bob","amount":100,"from":"USD","to":"INR"}'
 

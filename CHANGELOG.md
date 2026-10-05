@@ -18,6 +18,14 @@ When preparing a new release:
 
 ### Added
 
+- Resilient FX provider caching with bounded TTL, deterministic primary→fallback
+  provider order, freshness metadata on rates/quotes, quote versioning
+  (`quoteId` / `quoteVersion`), and explicit `reject_stale` / `allow_stale`
+  policies. Synchronous singleflight prevents provider stampedes. Transfer
+  creation binds quote identity (optional client `quoteId`, otherwise a freshly
+  minted quote) so transfer pricing cannot silently drift. Config knobs:
+  `FX_CACHE_TTL_MS`, `FX_STALE_GRACE_MS`, `FX_QUOTE_TTL_MS`,
+  `FX_ALLOW_STALE_TRANSFERS`.
 - Cursor pagination for `GET /api/transfers` and `GET /api/audit`. Pass
   `?cursor=` (with optional `?order=asc|desc`) to page by an indexed position
   instead of a row offset; responses carry a `pageInfo` block with
@@ -55,6 +63,19 @@ When preparing a new release:
 
 ### Fixed
 
+- FX providers must return a nonempty rate map containing only finite, positive
+  numbers before winning fallback selection or replacing the cache. Malformed
+  primary rates advance to the next provider. With no usable provider or cached
+  snapshot, quotes and transfers fail without creating records or consuming a
+  transfer retry key. Valid partial maps and the existing within-grace stale
+  display policy remain supported.
+- Successful provider responses now pass the requested FX freshness policy before
+  they can win fallback selection or replace the cache. Transfers reject a
+  newly fetched stale snapshot, including at the TTL boundary, while display
+  requests may use visibly stale rates strictly within grace. Expired or invalid
+  timestamps advance to the next provider; an unusable refresh preserves an
+  existing within-grace display snapshot. Provider timestamps are not renewed
+  merely because a fetch succeeded.
 - Offset pagination over transfer and audit history repeated or skipped rows
   when records were written while a client was paging, because the window was
   defined by a row count rather than a position. Cursor pagination anchors to
