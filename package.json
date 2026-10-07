@@ -5,8 +5,8 @@
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node src/index.js",
+    "start": "node init && node src/index.js",
+    "dev": "node init && node src/index.js",
     "test": "node --test test/*.test.js test/lib/*.test.js",
     "load-test": "k6 run scripts/load-test.js"
   },
